@@ -31,33 +31,53 @@ function SettingsContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error: sessionError }) => {
+      if (sessionError) {
+        setError(`Auth error: ${sessionError.message}`);
+        setLoading(false);
+        return;
+      }
       if (!session?.user) {
         router.push('/login');
         return;
       }
       setUser(session.user);
-      const { data: profileData } = await supabase
+
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
         .single();
+      if (profileError) {
+        setError(`Failed to load profile: ${profileError.message} (code: ${profileError.code})`);
+        setLoading(false);
+        return;
+      }
       if (profileData) setProfile(profileData as Profile);
 
-      const { data: chatData } = await supabase
+      const { data: chatData, error: chatError } = await supabase
         .from('chats')
         .select('id, name, ai_model, updated_at')
         .eq('user_id', session.user.id)
         .order('updated_at', { ascending: false })
         .limit(MAX_CHATS);
+      if (chatError) {
+        setError(`Failed to load chats: ${chatError.message} (code: ${chatError.code})`);
+        setLoading(false);
+        return;
+      }
       if (chatData) setChats(chatData as ChatSummary[]);
 
+      setLoading(false);
+    }).catch((err: unknown) => {
+      setError(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
       setLoading(false);
     });
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -74,6 +94,17 @@ function SettingsContent() {
     return (
       <div className="flex items-center justify-center h-screen bg-bg">
         <div className="w-5 h-5 border border-white/20 border-t-white rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-bg">
+        <div className="max-w-md w-full mx-4 p-4 bg-red-600/10 border border-red-500/30 rounded-xl">
+          <p className="text-sm font-medium text-red-400 mb-1">Settings failed to load</p>
+          <p className="text-xs text-red-300/80 font-mono break-all">{error}</p>
+        </div>
       </div>
     );
   }
