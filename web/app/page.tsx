@@ -33,28 +33,53 @@ export default function Home() {
   // Auth init
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const supabase = createClient();
+    // Safety net: never hang the loading screen more than 6 seconds
+    const fallback = setTimeout(() => setAuthLoading(false), 6000);
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        await loadProfile(session.user.id);
-        await loadChats(session.user.id);
-      }
+    // Skip Supabase entirely if env vars aren't configured yet
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+      clearTimeout(fallback);
       setAuthLoading(false);
-    });
+      return;
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+    let subscription: { unsubscribe: () => void } | null = null;
+
+    try {
+      const supabase = createClient();
+
+      supabase.auth.getSession().then(async ({ data: { session } }) => {
+        clearTimeout(fallback);
         setUser(session?.user ?? null);
         if (session?.user) {
           await loadProfile(session.user.id);
           await loadChats(session.user.id);
         }
-      }
-    );
+        setAuthLoading(false);
+      }).catch(() => {
+        clearTimeout(fallback);
+        setAuthLoading(false);
+      });
 
-    return () => subscription.unsubscribe();
+      const { data } = supabase.auth.onAuthStateChange(
+        async (_event, session) => {
+          setUser(session?.user ?? null);
+          if (session?.user) {
+            await loadProfile(session.user.id);
+            await loadChats(session.user.id);
+          }
+        }
+      );
+      subscription = data.subscription;
+    } catch {
+      clearTimeout(fallback);
+      setAuthLoading(false);
+    }
+
+    return () => {
+      clearTimeout(fallback);
+      subscription?.unsubscribe();
+    };
   }, []);
 
   // Extension detection

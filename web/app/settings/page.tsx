@@ -36,30 +36,51 @@ function SettingsContent() {
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!session?.user) {
+    const fallback = setTimeout(() => {
+      router.push('/login');
+    }, 8000);
+
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+      clearTimeout(fallback);
+      router.push('/login');
+      return;
+    }
+
+    try {
+      const supabase = createClient();
+      supabase.auth.getSession().then(async ({ data: { session } }) => {
+        clearTimeout(fallback);
+        if (!session?.user) {
+          router.push('/login');
+          return;
+        }
+        setUser(session.user);
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        if (profileData) setProfile(profileData as Profile);
+
+        const { data: chatData } = await supabase
+          .from('chats')
+          .select('id, name, ai_model, updated_at')
+          .eq('user_id', session.user.id)
+          .order('updated_at', { ascending: false })
+          .limit(MAX_CHATS);
+        if (chatData) setChats(chatData as ChatSummary[]);
+
+        setLoading(false);
+      }).catch(() => {
+        clearTimeout(fallback);
         router.push('/login');
-        return;
-      }
-      setUser(session.user);
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-      if (profileData) setProfile(profileData as Profile);
+      });
+    } catch {
+      clearTimeout(fallback);
+      router.push('/login');
+    }
 
-      const { data: chatData } = await supabase
-        .from('chats')
-        .select('id, name, ai_model, updated_at')
-        .eq('user_id', session.user.id)
-        .order('updated_at', { ascending: false })
-        .limit(MAX_CHATS);
-      if (chatData) setChats(chatData as ChatSummary[]);
-
-      setLoading(false);
-    });
+    return () => clearTimeout(fallback);
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleTabChange(tab: Tab) {
