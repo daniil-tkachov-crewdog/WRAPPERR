@@ -20,7 +20,7 @@ function chatNameFromMessage(text: string): string {
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
   const [extensionActive, setExtensionActive] = useState(false);
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
