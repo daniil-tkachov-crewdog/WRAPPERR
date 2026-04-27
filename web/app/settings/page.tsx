@@ -31,7 +31,7 @@ function SettingsContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
@@ -43,11 +43,22 @@ function SettingsContent() {
         return;
       }
       setUser(session.user);
-      const { data: profileData } = await supabase
+
+      let { data: profileData } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
         .single();
+
+      if (!profileData) {
+        const { data: created } = await supabase
+          .from('profiles')
+          .upsert({ id: session.user.id, name: '', default_ai: 'chatgpt', appearance: 'dark' })
+          .select()
+          .single();
+        profileData = created;
+      }
+
       if (profileData) setProfile(profileData as Profile);
 
       const { data: chatData } = await supabase
