@@ -54,13 +54,27 @@ function SettingsContent() {
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
-        .single();
+        .maybeSingle();
       if (profileError) {
         setError(`Failed to load profile: ${profileError.message} (code: ${profileError.code})`);
         setLoading(false);
         return;
       }
-      if (profileData) setProfile(profileData as Profile);
+      if (profileData) {
+        setProfile(profileData as Profile);
+      } else {
+        const { data: newProfile, error: insertError } = await supabase
+          .from('profiles')
+          .upsert({ id: session.user.id, name: '', default_ai: 'chatgpt', appearance: 'dark' })
+          .select()
+          .single();
+        if (insertError) {
+          setError(`Failed to create profile: ${insertError.message} (code: ${insertError.code})`);
+          setLoading(false);
+          return;
+        }
+        if (newProfile) setProfile(newProfile as Profile);
+      }
 
       const { data: chatData, error: chatError } = await supabase
         .from('chats')
