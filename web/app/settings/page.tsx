@@ -38,7 +38,17 @@ function SettingsContent() {
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getSession().then(async ({ data: { session }, error: sessionError }) => {
+
+    async function getSessionWithRetry() {
+      const result = await supabase.auth.getSession();
+      if (result.error?.message?.includes('Lock') && result.error.message.includes('stolen')) {
+        await new Promise((r) => setTimeout(r, 500));
+        return supabase.auth.getSession();
+      }
+      return result;
+    }
+
+    getSessionWithRetry().then(async ({ data: { session }, error: sessionError }) => {
       if (sessionError) {
         setError(`Auth error: ${sessionError.message}`);
         setLoading(false);
