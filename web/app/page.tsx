@@ -42,6 +42,8 @@ export default function Home() {
         await loadChats(session.user.id);
       }
       setAuthLoading(false);
+    }).catch(() => {
+      setAuthLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
