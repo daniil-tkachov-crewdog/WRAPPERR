@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wrapperr</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <header>
+      <span class="logo">WRAPPERR</span>
+      <div class="status" id="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking…</span>
+      </div>
+    </header>
+
+    <div class="section">
+      <label class="label">Summary prompt</label>
+      <p class="hint">Edit the prompt used when switching AI models mid-conversation.</p>
+      <textarea id="summaryPrompt" spellcheck="false"></textarea>
+      <div class="actions">
+        <button id="resetBtn" class="btn-ghost">Reset to default</button>
+        <button id="saveBtn" class="btn-primary">Save</button>
+      </div>
+      <span id="savedMsg" class="saved-msg"></span>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

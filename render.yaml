@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: wrapperr
+    env: node
+    rootDir: web
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: NEXT_PUBLIC_EXTENSION_ID
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
