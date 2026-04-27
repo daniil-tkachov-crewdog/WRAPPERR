@@ -31,7 +31,7 @@ function SettingsContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
