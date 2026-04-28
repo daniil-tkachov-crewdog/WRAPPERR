@@ -11,6 +11,6 @@ window.addEventListener('message', (event) => {
 // Relay extension background responses → web app via postMessage
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'WRAPPERR_RESPONSE') {
-    window.postMessage(msg, '*');
+    window.postMessage(msg, window.location.origin);
   }
 });
