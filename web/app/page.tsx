@@ -189,10 +189,11 @@ export default function Home() {
       setMessages(finalMessages);
       await saveChat(chatId, chatName, finalMessages, selectedAI);
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
       const errMessage: Message = {
         id: generateId(),
         role: 'assistant',
-        content: 'Something went wrong. Please check the extension and try again.',
+        content: `Something went wrong: ${detail}`,
         aiModel: selectedAI,
         timestamp: Date.now(),
       };

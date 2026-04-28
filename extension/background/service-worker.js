@@ -38,7 +38,7 @@ async function ensureTab(ai) {
     } catch {}
   }
 
-  const tab = await chrome.tabs.create({ url: AI_URLS[ai], active: true });
+  const tab = await chrome.tabs.create({ url: AI_URLS[ai], active: false });
   tabMap[ai] = tab.id;
   await waitForTabLoad(tab.id);
   // Extra settle time for SPA hydration
@@ -91,6 +91,7 @@ async function sendToAI(ai, message, requestId) {
       requestId,
     });
 
+    if (response?.error) throw new Error(response.error);
     return response?.text ?? '';
   } catch (err) {
     throw new Error(err.message || 'Failed to communicate with AI tab');

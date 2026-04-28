@@ -1,33 +1,36 @@
 async function injectMessage(message) {
-  // Find the input
-  const input = document.querySelector('#prompt-textarea');
+  const input = document.querySelector('#prompt-textarea')
+    ?? document.querySelector('textarea[data-id="root"]')
+    ?? document.querySelector('div[contenteditable="true"]');
   if (!input) throw new Error('ChatGPT input not found');
 
-  // Set value via React's synthetic event system
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    'value'
-  )?.set;
+  input.focus();
 
-  if (nativeInputValueSetter) {
-    nativeInputValueSetter.call(input, message);
+  if (input.tagName === 'TEXTAREA') {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value'
+    )?.set;
+    if (setter) setter.call(input, message);
+    else input.value = message;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // contenteditable (current ChatGPT uses ProseMirror-style div)
+    input.textContent = '';
+    document.execCommand('insertText', false, message);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
   }
 
   await sleep(300);
 
-  // Click send button
   const sendBtn = document.querySelector('[data-testid="send-button"]')
     ?? document.querySelector('button[aria-label="Send prompt"]')
+    ?? document.querySelector('button[data-testid="fruitjuice-send-button"]')
     ?? document.querySelector('button[class*="send"]');
 
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
   } else {
-    // Fallback: press Enter
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   }
 }
