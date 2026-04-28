@@ -47,7 +47,7 @@ async function checkStatus() {
     }
 
     chrome.runtime.sendMessage({ type: 'WRAPPERR_GET_STATUS' }, (res) => {
-      if (chrome.runtime.lastError || !res) {
+      if (chrome.runtime.lastError || !res || res.status !== 'connected') {
         setStatus('issue', 'There\'s an issue');
       } else {
         setStatus('connected', 'Connected');

@@ -1,0 +1,1 @@
+window.__WRAPPERR_EXTENSION_ACTIVE__ = true;

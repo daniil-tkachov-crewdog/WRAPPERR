@@ -117,9 +117,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'WRAPPERR_GET_STATUS') {
-    sendResponse({ status: 'connected' });
+    pingWrapperrTab()
+      .then((ok) => sendResponse({ status: ok ? 'connected' : 'issue' }))
+      .catch(() => sendResponse({ status: 'issue' }));
+    return true; // async response
   }
 });
+
+async function pingWrapperrTab() {
+  const tabs = await chrome.tabs.query({});
+  const target = tabs.find(
+    (t) => t.url?.includes('onrender.com') || t.url?.includes('localhost:3000')
+  );
+  if (!target) return false;
+  try {
+    const res = await chrome.tabs.sendMessage(target.id, { type: 'WRAPPERR_PING' });
+    return res?.pong === true;
+  } catch {
+    return false;
+  }
+}
 
 async function sendToWrapperrTab(data) {
   const tabs = await chrome.tabs.query({});

@@ -1,6 +1,3 @@
-// Signals to the web app that the extension is active
-window.__WRAPPERR_EXTENSION_ACTIVE__ = true;
-
 // Relay postMessage from web app → extension background
 window.addEventListener('message', (event) => {
   if (event.source !== window) return;
@@ -8,9 +5,14 @@ window.addEventListener('message', (event) => {
   chrome.runtime.sendMessage(event.data);
 });
 
-// Relay extension background responses → web app via postMessage
-chrome.runtime.onMessage.addListener((msg) => {
+// Relay extension background responses → web app via postMessage,
+// and respond to liveness pings from the service worker.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'WRAPPERR_RESPONSE') {
     window.postMessage(msg, window.location.origin);
+    return;
+  }
+  if (msg.type === 'WRAPPERR_PING') {
+    sendResponse({ pong: true });
   }
 });

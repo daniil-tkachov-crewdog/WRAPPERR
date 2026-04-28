@@ -22,6 +22,12 @@
   "content_scripts": [
     {
       "matches": ["https://*.onrender.com/*", "http://localhost:3000/*"],
+      "js": ["content-scripts/wrapperr-flag.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://*.onrender.com/*", "http://localhost:3000/*"],
       "js": ["content-scripts/wrapperr-bridge.js"],
       "run_at": "document_start"
     }
