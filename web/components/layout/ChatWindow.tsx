@@ -15,8 +15,10 @@ interface Props {
   selectedAI: AIModel;
   loading: boolean;
   transferring: boolean;
+  timeoutMs: number;
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
+  onTimeoutChange: (ms: number) => void;
 }
 
 export default function ChatWindow({
@@ -26,8 +28,10 @@ export default function ChatWindow({
   selectedAI,
   loading,
   transferring,
+  timeoutMs,
   onSendMessage,
   onSwitchAI,
+  onTimeoutChange,
 }: Props) {
   if (!user) {
     return (
@@ -85,8 +89,10 @@ export default function ChatWindow({
         selectedAI={selectedAI}
         loading={loading}
         transferring={transferring}
+        timeoutMs={timeoutMs}
         onSendMessage={onSendMessage}
         onSwitchAI={onSwitchAI}
+        onTimeoutChange={onTimeoutChange}
       />
     </div>
   );

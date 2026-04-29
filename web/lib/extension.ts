@@ -7,13 +7,17 @@ export function isExtensionActive(): boolean {
 
 let requestCounter = 0;
 
-export function sendMessageToAI(ai: AIModel, message: string): Promise<string> {
+export function sendMessageToAI(
+  ai: AIModel,
+  message: string,
+  timeoutMs: number = 60000
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const requestId = `req_${++requestCounter}_${Date.now()}`;
     const timeout = setTimeout(() => {
       window.removeEventListener('message', handler);
       reject(new Error('Extension response timeout'));
-    }, 60000);
+    }, timeoutMs);
 
     function handler(event: MessageEvent) {
       if (

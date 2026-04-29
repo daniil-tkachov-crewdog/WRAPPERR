@@ -10,8 +10,10 @@ interface Props {
   selectedAI: AIModel;
   loading: boolean;
   transferring: boolean;
+  timeoutMs: number;
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
+  onTimeoutChange: (ms: number) => void;
 }
 
 export default function ActiveChatState({
@@ -19,8 +21,10 @@ export default function ActiveChatState({
   selectedAI,
   loading,
   transferring,
+  timeoutMs,
   onSendMessage,
   onSwitchAI,
+  onTimeoutChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -72,8 +76,10 @@ export default function ActiveChatState({
       {/* Input bar */}
       <InputBar
         selectedAI={selectedAI}
+        timeoutMs={timeoutMs}
         onSendMessage={onSendMessage}
         onSwitchAI={onSwitchAI}
+        onTimeoutChange={onTimeoutChange}
         loading={loading || transferring}
       />
     </div>

@@ -6,30 +6,48 @@ import { AI_MODELS } from '@/lib/constants';
 
 interface Props {
   selectedAI: AIModel;
+  timeoutMs: number;
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
+  onTimeoutChange: (ms: number) => void;
   disabled?: boolean;
   loading?: boolean;
 }
 
+const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
+  { ms: 30_000, label: '30s' },
+  { ms: 60_000, label: '1m' },
+  { ms: 120_000, label: '2m' },
+  { ms: 300_000, label: '5m' },
+];
+
 export default function InputBar({
   selectedAI,
+  timeoutMs,
   onSendMessage,
   onSwitchAI,
+  onTimeoutChange,
   disabled = false,
   loading = false,
 }: Props) {
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [timeoutOpen, setTimeoutOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const timeoutRef = useRef<HTMLDivElement>(null);
 
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
+  const currentTimeoutLabel =
+    TIMEOUT_OPTIONS.find((o) => o.ms === timeoutMs)?.label ?? `${Math.round(timeoutMs / 1000)}s`;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
+      }
+      if (timeoutRef.current && !timeoutRef.current.contains(e.target as Node)) {
+        setTimeoutOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -101,6 +119,54 @@ export default function InputBar({
                     }`}
                   >
                     {model.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="w-px h-5 bg-border shrink-0" />
+
+          {/* Timeout selector */}
+          <div className="relative shrink-0" ref={timeoutRef}>
+            <button
+              onClick={() => setTimeoutOpen((v) => !v)}
+              disabled={loading}
+              title="Response timeout"
+              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 py-1"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <span className="text-white">{currentTimeoutLabel}</span>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="currentColor"
+                className={`transition-transform ${timeoutOpen ? 'rotate-180' : ''}`}
+              >
+                <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+              </svg>
+            </button>
+
+            {timeoutOpen && (
+              <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[100px]">
+                {TIMEOUT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.ms}
+                    onClick={() => {
+                      onTimeoutChange(opt.ms);
+                      setTimeoutOpen(false);
+                    }}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                      opt.ms === timeoutMs
+                        ? 'text-white bg-white/5'
+                        : 'text-muted hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    {opt.label}
                   </button>
                 ))}
               </div>

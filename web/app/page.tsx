@@ -29,6 +29,7 @@ export default function Home() {
   const [selectedAI, setSelectedAI] = useState<AIModel>('chatgpt');
   const [loading, setLoading] = useState(false);
   const [transferring, setTransferring] = useState(false);
+  const [timeoutMs, setTimeoutMs] = useState(60000);
 
   // Auth init
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -111,6 +112,8 @@ export default function Home() {
     setCurrentChatId(null);
     setMessages([]);
     setSelectedAI(profile?.default_ai ?? 'chatgpt');
+    setLoading(false);
+    setTransferring(false);
   }
 
   async function saveChat(
@@ -175,7 +178,7 @@ export default function Home() {
     }
 
     try {
-      const response = await sendMessageToAI(selectedAI, text);
+      const response = await sendMessageToAI(selectedAI, text, timeoutMs);
 
       const aiMessage: Message = {
         id: generateId(),
@@ -187,7 +190,9 @@ export default function Home() {
 
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      await saveChat(chatId, chatName, finalMessages, selectedAI);
+      saveChat(chatId, chatName, finalMessages, selectedAI).catch((e) =>
+        console.error('saveChat failed:', e)
+      );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       const errMessage: Message = {
@@ -215,12 +220,12 @@ export default function Home() {
     setTransferring(true);
 
     try {
-      const summary = await sendMessageToAI(selectedAI, SUMMARY_PROMPT);
+      const summary = await sendMessageToAI(selectedAI, SUMMARY_PROMPT, timeoutMs);
 
       setSelectedAI(newAI);
 
       const contextMessage = `Here's the context from our previous conversation:\n\n${summary}\n\nPlease continue from where we left off.`;
-      const contextResponse = await sendMessageToAI(newAI, contextMessage);
+      const contextResponse = await sendMessageToAI(newAI, contextMessage, timeoutMs);
 
       const transferMsg: Message = {
         id: generateId(),
@@ -235,7 +240,9 @@ export default function Home() {
 
       if (currentChatId) {
         const chatName = chats.find((c) => c.id === currentChatId)?.name ?? 'Chat';
-        await saveChat(currentChatId, chatName, updatedMessages, newAI);
+        saveChat(currentChatId, chatName, updatedMessages, newAI).catch((e) =>
+          console.error('saveChat failed:', e)
+        );
       }
     } catch {
       setSelectedAI(newAI);
@@ -270,8 +277,10 @@ export default function Home() {
           selectedAI={selectedAI}
           loading={loading}
           transferring={transferring}
+          timeoutMs={timeoutMs}
           onSendMessage={handleSendMessage}
           onSwitchAI={handleSwitchAI}
+          onTimeoutChange={setTimeoutMs}
         />
       </main>
     </div>
