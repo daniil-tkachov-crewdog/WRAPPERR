@@ -7,6 +7,9 @@ node_modules/
 web/.next/
 web/out/
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Environment files — never commit these
 .env
 .env.local
