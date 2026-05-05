@@ -40,11 +40,14 @@ export default function Home() {
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setUser(session?.user ?? null);
+      // Unblock the UI immediately once we know the session state — profile and chats load after.
+      // Previously setAuthLoading(false) was after the awaits, so a slow/hanging Supabase query
+      // kept the fullscreen spinner up forever.
+      setAuthLoading(false);
       if (session?.user) {
         await loadProfile(session.user.id);
         await loadChats(session.user.id);
       }
-      setAuthLoading(false);
     }).catch(() => {
       setAuthLoading(false);
     });
