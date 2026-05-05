@@ -32,24 +32,43 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: Gemini truncated responses badly with the previous 4-tick / innerText-only
+// approach because Gemini streams in bursts with multi-second pauses; the heuristic fired during a
+// pause and captured ~1/3 of the answer. Now: STABLE_TICKS = 8 (~6.4s), reset whenever a loading
+// indicator is visible, and additionally require the post-generation response-action toolbar
+// (thumbs up/down, copy) to be rendered — Gemini only mounts that toolbar after streaming
+// completes. Capture textContent in addition to innerText since virtualized blocks were being
+// missed.
 async function waitForResponse() {
   await sleep(2000);
 
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
+    const STABLE_TICKS = 8;
+    const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
-      // Gemini model response containers
       const responses = document.querySelectorAll(
         '.model-response-text, [class*="model-response"], .response-container'
       );
       const last = responses[responses.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Check for loading
-      const isLoading = document.querySelector('[class*="loading-indicator"], .pending-message');
-      if (isLoading) {
+      // Loading: blue progress / pending bubble.
+      const isLoading = !!document.querySelector(
+        '[class*="loading-indicator"], .pending-message, [class*="thinking"]'
+      );
+      // Done-streaming signal: Gemini renders a toolbar (copy / thumbs / share) on the final
+      // message only after generation completes. If we don't find it yet, keep waiting.
+      const hasResponseActions = !!document.querySelector(
+        'message-actions, [data-test-id*="response-actions"], button[aria-label*="Copy"], button[data-test-id*="copy-button"]'
+      );
+
+      if (isLoading || !hasResponseActions) {
         stableCount = 0;
         lastText = text;
         return;
@@ -57,7 +76,7 @@ async function waitForResponse() {
 
       if (text && text === lastText) {
         stableCount++;
-        if (stableCount >= 4) {
+        if (stableCount >= STABLE_TICKS) {
           clearInterval(interval);
           resolve(text);
         }
@@ -65,12 +84,12 @@ async function waitForResponse() {
         lastText = text;
         stableCount = 0;
       }
-    }, 800);
+    }, TICK_MS);
 
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 

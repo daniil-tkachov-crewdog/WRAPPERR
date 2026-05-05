@@ -38,22 +38,33 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: DeepSeek currently never captures — selectors picked the wrong container.
+// We broaden the response-container set to include known DeepSeek markdown wrappers, treat the
+// stop button (and thinking/loading classes) as the streaming gate, and apply the 8-tick /
+// textContent strategy. If capture still fails the user should share the message DOM dump.
 async function waitForResponse() {
   await sleep(2000);
 
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
+    const STABLE_TICKS = 8;
+    const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
       const messages = document.querySelectorAll(
-        '[class*="assistant"], [class*="ds-message-row"]:not([class*="user"])'
+        '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])'
       );
       const last = messages[messages.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
 
-      const isLoading = document.querySelector('[class*="thinking"], [class*="loading"]');
-      if (isLoading) {
+      const isStreaming = !!document.querySelector(
+        'button[aria-label*="Stop"], [class*="thinking"], [class*="loading"], [class*="generating"]'
+      );
+      if (isStreaming) {
         stableCount = 0;
         lastText = text;
         return;
@@ -61,7 +72,7 @@ async function waitForResponse() {
 
       if (text && text === lastText) {
         stableCount++;
-        if (stableCount >= 4) {
+        if (stableCount >= STABLE_TICKS) {
           clearInterval(interval);
           resolve(text);
         }
@@ -69,12 +80,12 @@ async function waitForResponse() {
         lastText = text;
         stableCount = 0;
       }
-    }, 800);
+    }, TICK_MS);
 
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 

@@ -37,24 +37,33 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: Perplexity's previous selector-loading combo was firing during stream pauses
+// and the response container was overly generic (any .prose / .markdown). We tighten to answer
+// blocks specifically, watch a Stop button as the streaming signal, broaden the loading sentinel,
+// and use the 8-tick / textContent strategy shared by the other AIs.
 async function waitForResponse() {
   await sleep(2500);
 
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
+    const STABLE_TICKS = 8;
+    const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
-      // Perplexity uses prose blocks for answers
       const answers = document.querySelectorAll(
-        '[class*="prose"], [class*="answer"], .markdown'
+        '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown'
       );
       const last = answers[answers.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Check for loading indicator
-      const isLoading = document.querySelector('[class*="loading"], [aria-label*="loading"]');
-      if (isLoading) {
+      const isStreaming = !!document.querySelector(
+        'button[aria-label*="Stop"], [class*="loading"], [aria-label*="loading"], [class*="Spinner"]'
+      );
+      if (isStreaming) {
         stableCount = 0;
         lastText = text;
         return;
@@ -62,7 +71,7 @@ async function waitForResponse() {
 
       if (text && text === lastText) {
         stableCount++;
-        if (stableCount >= 4) {
+        if (stableCount >= STABLE_TICKS) {
           clearInterval(interval);
           resolve(text);
         }
@@ -70,12 +79,12 @@ async function waitForResponse() {
         lastText = text;
         stableCount = 0;
       }
-    }, 800);
+    }, TICK_MS);
 
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 

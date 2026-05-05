@@ -35,6 +35,13 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: poll the last assistant bubble until text stops changing AND no streaming
+// indicator is present for STABLE_TICKS consecutive checks (~6.4s). ChatGPT shows a "Stop
+// generating" / "Stop streaming" button while a response is being produced and removes it when
+// done; we treat the presence of that button as a hard "still streaming" signal. We capture the
+// longer of innerText / textContent because innerText silently drops content inside collapsed or
+// off-screen blocks during streaming. The naive 4-tick / innerText-only version was firing during
+// brief mid-stream pauses and capturing a partial response.
 async function waitForResponse() {
   // Wait for streaming to start
   await sleep(1500);
@@ -42,14 +49,27 @@ async function waitForResponse() {
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
-    const STABLE_TICKS = 4;
+    const STABLE_TICKS = 8;
     const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
-      // Get the last assistant message
       const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
       const last = messages[messages.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
+
+      // Stop button is rendered only while the response is streaming.
+      const isStreaming = !!document.querySelector(
+        'button[aria-label*="Stop"], button[data-testid="stop-button"]'
+      );
+
+      if (isStreaming) {
+        stableCount = 0;
+        lastText = text;
+        return;
+      }
 
       if (text && text === lastText) {
         stableCount++;
@@ -63,11 +83,10 @@ async function waitForResponse() {
       }
     }, TICK_MS);
 
-    // Hard timeout
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 

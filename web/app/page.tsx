@@ -116,6 +116,12 @@ export default function Home() {
     setTransferring(false);
   }
 
+  // saveChat: upserts the chat row in Supabase, then refreshes the sidebar list.
+  // Called fire-and-forget from message handlers — never awaited inside the UI try-block, because a
+  // hung Supabase write would otherwise block the loading spinner. Supabase returns errors as a
+  // value (not a throw), so the outer .catch() does NOT see RLS / schema / auth failures — we have
+  // to log `error` explicitly here. If chats stop appearing in the sidebar, that console line is
+  // the entry point for diagnosis.
   async function saveChat(
     chatId: string,
     chatName: string,
@@ -134,9 +140,11 @@ export default function Home() {
       updated_at: new Date().toISOString(),
     });
 
-    if (!error) {
-      await loadChats(user.id);
+    if (error) {
+      console.error('saveChat upsert error:', error);
+      return;
     }
+    await loadChats(user.id);
   }
 
   async function handleSendMessage(text: string) {

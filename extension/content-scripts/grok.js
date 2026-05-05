@@ -36,24 +36,42 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: Grok currently times out on capture (response selector candidates are speculative
+// — the Grok DOM uses ambiguous classes). We add a generic "stop button" streaming gate (Grok shows
+// a stop / square icon while generating), an 8-tick stability window, and broaden response-container
+// selectors. If this still times out the user should share the final message DOM dump and we'll
+// pin the selector in a follow-up.
 async function waitForResponse() {
   await sleep(2000);
 
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
+    const STABLE_TICKS = 8;
+    const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
-      // Grok response containers
       const messages = document.querySelectorAll(
-        '[class*="message"][class*="assistant"], [data-message-author="grok"]'
+        '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]'
       );
       const last = messages[messages.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
+
+      const isStreaming = !!document.querySelector(
+        'button[aria-label*="Stop"], button[aria-label*="stop"], [class*="loading"]'
+      );
+      if (isStreaming) {
+        stableCount = 0;
+        lastText = text;
+        return;
+      }
 
       if (text && text === lastText) {
         stableCount++;
-        if (stableCount >= 4) {
+        if (stableCount >= STABLE_TICKS) {
           clearInterval(interval);
           resolve(text);
         }
@@ -61,12 +79,12 @@ async function waitForResponse() {
         lastText = text;
         stableCount = 0;
       }
-    }, 800);
+    }, TICK_MS);
 
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 

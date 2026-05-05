@@ -28,14 +28,37 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+// ensureTab: returns a healthy tab on the AI's site, reusing the tracked tab when possible.
+// Three failure modes we have to handle, otherwise we either hang or open duplicate tabs:
+//   1. Tab was closed -> chrome.tabs.get throws, we fall through to creating a new tab.
+//   2. Tab was discarded by Chrome to save memory -> reload it instead of creating a new one.
+//   3. User (or a redirect) navigated the tab away from the AI's origin -> navigate it back.
+// Only check origin (URL host prefix), not the full URL, because each AI site uses many sub-paths.
 async function ensureTab(ai) {
-  let tabId = tabMap[ai];
+  const tabId = tabMap[ai];
 
   if (tabId !== undefined) {
     try {
       const tab = await chrome.tabs.get(tabId);
-      if (tab && !tab.discarded) return tabId;
-    } catch {}
+      if (tab) {
+        if (tab.discarded) {
+          await chrome.tabs.reload(tabId);
+          await waitForTabLoad(tabId);
+          await sleep(2000);
+          return tabId;
+        }
+        if (!tab.url || !tab.url.startsWith(AI_URLS[ai])) {
+          await chrome.tabs.update(tabId, { url: AI_URLS[ai] });
+          await waitForTabLoad(tabId);
+          await sleep(2000);
+          return tabId;
+        }
+        return tabId;
+      }
+    } catch {
+      // Tab was closed or otherwise gone — drop the stale entry and create a new one below.
+      delete tabMap[ai];
+    }
   }
 
   const tab = await chrome.tabs.create({ url: AI_URLS[ai], active: false });
@@ -80,6 +103,11 @@ async function injectContentScript(tabId, ai) {
   }
 }
 
+// sendToAI: ensures the AI tab, injects its content script, and asks it to drive a single message.
+// If chrome.tabs.sendMessage fails because the tab has no listening receiver (e.g. tab navigated
+// or content script unloaded), we wipe tabMap[ai] so the *next* call rebuilds from scratch instead
+// of repeatedly hitting the same dead tab. We do NOT clear on content-script errors (those are
+// recoverable on the same tab).
 async function sendToAI(ai, message, requestId) {
   try {
     const tabId = await ensureTab(ai);
@@ -94,7 +122,15 @@ async function sendToAI(ai, message, requestId) {
     if (response?.error) throw new Error(response.error);
     return response?.text ?? '';
   } catch (err) {
-    throw new Error(err.message || 'Failed to communicate with AI tab');
+    const msg = err?.message || '';
+    if (
+      msg.includes('Receiving end does not exist') ||
+      msg.includes('No tab with id') ||
+      msg.includes('message port closed')
+    ) {
+      delete tabMap[ai];
+    }
+    throw new Error(msg || 'Failed to communicate with AI tab');
   }
 }
 

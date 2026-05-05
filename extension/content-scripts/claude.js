@@ -32,26 +32,29 @@ async function injectMessage(message) {
   }
 }
 
+// waitForResponse: poll Claude's last assistant message and resolve once data-is-streaming has been
+// false (or absent) for STABLE_TICKS consecutive checks AND the captured text has stopped
+// changing. data-is-streaming is the most reliable "still generating" signal Claude exposes. We
+// capture the longer of innerText / textContent so collapsed code blocks or wrapped content
+// aren't missed.
 async function waitForResponse() {
   await sleep(2000);
 
   return new Promise((resolve) => {
     let lastText = '';
     let stableCount = 0;
-    const STABLE_TICKS = 4;
+    const STABLE_TICKS = 8;
     const TICK_MS = 800;
+    const HARD_TIMEOUT_MS = 240000;
 
     const interval = setInterval(() => {
-      // Claude renders messages in divs with font-claude-message class or similar
-      const messages = document.querySelectorAll(
-        '[data-is-streaming="false"] .font-claude-message, .font-claude-message'
-      );
       const allMessages = document.querySelectorAll('.font-claude-message');
       const last = allMessages[allMessages.length - 1];
-      const text = last?.innerText?.trim() ?? '';
+      const innerText = last?.innerText?.trim() ?? '';
+      const textContent = last?.textContent?.trim() ?? '';
+      const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Also check for streaming indicator — if present, not done yet
-      const isStreaming = document.querySelector('[data-is-streaming="true"]');
+      const isStreaming = !!document.querySelector('[data-is-streaming="true"]');
       if (isStreaming) {
         stableCount = 0;
         lastText = text;
@@ -73,7 +76,7 @@ async function waitForResponse() {
     setTimeout(() => {
       clearInterval(interval);
       resolve(lastText || 'No response received.');
-    }, 90000);
+    }, HARD_TIMEOUT_MS);
   });
 }
 
