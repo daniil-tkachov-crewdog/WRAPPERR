@@ -30,7 +30,15 @@ export async function middleware(request: NextRequest) {
 
   // Calling getUser() triggers a token refresh if the access token is expired.
   // Must be awaited — do not remove or make lazy.
-  await supabase.auth.getUser();
+  // In dev mode, Next.js fires many parallel requests (HMR, prefetch) that all hit the middleware
+  // concurrently and race for the navigator lock on the auth token. The "lock stolen" error is
+  // benign — it means another concurrent request already won the lock and refreshed the token.
+  try {
+    await supabase.auth.getUser();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes('was released because another request stole it')) throw e;
+  }
 
   return response;
 }
