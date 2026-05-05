@@ -20,7 +20,9 @@ function chatNameFromMessage(text: string): string {
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
+  // authLoading must start true — the page must not render as logged-out while getSession() is
+  // still in flight. Set to false only once the session check resolves (success or failure).
+  const [authLoading, setAuthLoading] = useState(true);
   const [extensionActive, setExtensionActive] = useState(false);
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
