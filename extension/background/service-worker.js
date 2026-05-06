@@ -17,15 +17,30 @@ const AI_SCRIPTS = {
 };
 
 // tabMap: { [ai]: tabId }
+// CRITICAL: Chrome MV3 service workers terminate after ~30s of inactivity and lose all in-memory
+// state on the next event. Without persistence the second message after an idle gap thinks no AI
+// tab exists and opens a fresh one, breaking conversation continuity. We mirror tabMap to
+// chrome.storage.session (in-memory, browser-session-scoped, fast) and reload it on SW startup.
+// Every read awaits tabMapReady; every write calls persistTabMap().
 let tabMap = {};
+const tabMapReady = chrome.storage.session.get('tabMap').then((r) => {
+  if (r && r.tabMap && typeof r.tabMap === 'object') tabMap = r.tabMap;
+}).catch(() => {});
+
+async function persistTabMap() {
+  try { await chrome.storage.session.set({ tabMap }); } catch {}
+}
 
 // pendingRequests: { [requestId]: { resolve, reject, timeoutId } }
 const pendingRequests = {};
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await tabMapReady;
+  let changed = false;
   for (const [ai, id] of Object.entries(tabMap)) {
-    if (id === tabId) delete tabMap[ai];
+    if (id === tabId) { delete tabMap[ai]; changed = true; }
   }
+  if (changed) await persistTabMap();
 });
 
 // ensureTab: returns a healthy tab on the AI's site, reusing the tracked tab when possible.
@@ -35,6 +50,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 //   3. User (or a redirect) navigated the tab away from the AI's origin -> navigate it back.
 // Only check origin (URL host prefix), not the full URL, because each AI site uses many sub-paths.
 async function ensureTab(ai) {
+  await tabMapReady;
   const tabId = tabMap[ai];
 
   if (tabId !== undefined) {
@@ -42,6 +58,7 @@ async function ensureTab(ai) {
       const tab = await chrome.tabs.get(tabId);
       if (tab) {
         if (tab.discarded) {
+          // Reload preserves the URL, so the in-progress conversation survives Chrome's memory saver.
           await chrome.tabs.reload(tabId);
           await waitForTabLoad(tabId);
           await sleep(2000);
@@ -56,13 +73,14 @@ async function ensureTab(ai) {
         return tabId;
       }
     } catch {
-      // Tab was closed or otherwise gone — drop the stale entry and create a new one below.
       delete tabMap[ai];
+      await persistTabMap();
     }
   }
 
   const tab = await chrome.tabs.create({ url: AI_URLS[ai], active: false });
   tabMap[ai] = tab.id;
+  await persistTabMap();
   await waitForTabLoad(tab.id);
   // Extra settle time for SPA hydration
   await sleep(2000);
@@ -125,10 +143,13 @@ async function sendToAI(ai, message, requestId) {
     const msg = err?.message || '';
     if (
       msg.includes('Receiving end does not exist') ||
-      msg.includes('No tab with id') ||
-      msg.includes('message port closed')
+      msg.includes('No tab with id')
     ) {
+      // Don't clear on "message port closed" / "channel closed" — those happen when the content
+      // script took longer than the channel allows but the tab itself is still healthy. Clearing
+      // tabMap on those errors caused fresh tabs to open on every retry.
       delete tabMap[ai];
+      await persistTabMap();
     }
     throw new Error(msg || 'Failed to communicate with AI tab');
   }

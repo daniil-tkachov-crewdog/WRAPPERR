@@ -1,30 +1,44 @@
+// injectMessage: Grok has migrated between textarea and contenteditable composers across
+// redesigns. We try textarea selectors first (legacy), then contenteditable fallbacks (current).
+// Each input type needs a different value-setting path: native value setter for textarea,
+// document.execCommand('insertText') for contenteditable, otherwise React state won't update.
 async function injectMessage(message) {
   const input = document.querySelector('textarea[placeholder*="Ask"]')
     ?? document.querySelector('textarea[data-testid*="input"]')
-    ?? document.querySelector('textarea');
+    ?? document.querySelector('textarea[aria-label*="message"]')
+    ?? document.querySelector('textarea')
+    ?? document.querySelector('div[contenteditable="true"][role="textbox"]')
+    ?? document.querySelector('[contenteditable="true"][aria-label*="Ask"]')
+    ?? document.querySelector('[contenteditable="true"][aria-label*="message"]')
+    ?? document.querySelector('[contenteditable="true"]');
 
   if (!input) throw new Error('Grok input not found');
 
   input.focus();
   await sleep(200);
 
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    'value'
-  )?.set;
-
-  if (nativeInputValueSetter) {
-    nativeInputValueSetter.call(input, message);
+  if (input.tagName === 'TEXTAREA') {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value'
+    )?.set;
+    if (setter) setter.call(input, message);
+    else input.value = message;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // Contenteditable path — clear, then insert via execCommand so React listeners fire.
+    document.execCommand('selectAll', false, undefined);
+    document.execCommand('delete', false, undefined);
+    document.execCommand('insertText', false, message);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
   }
 
   await sleep(300);
 
   const sendBtn = document.querySelector('button[aria-label*="Send"]')
+    ?? document.querySelector('button[aria-label*="Submit"]')
     ?? document.querySelector('button[type="submit"]')
+    ?? document.querySelector('button[data-testid*="send"]')
     ?? [...document.querySelectorAll('button')].find(
         (b) => b.getAttribute('aria-label')?.toLowerCase().includes('send')
       );

@@ -1,29 +1,43 @@
+// injectMessage: Perplexity moved to a Lexical-based contenteditable composer in 2025;
+// the legacy textarea selectors no longer match. We try textarea first for backward-compat,
+// then contenteditable variants. React-controlled inputs require the native value setter
+// (textarea) or document.execCommand('insertText') (contenteditable) for the framework to see
+// the change.
 async function injectMessage(message) {
   const input = document.querySelector('textarea[placeholder*="Ask"]')
     ?? document.querySelector('textarea[placeholder*="ask"]')
-    ?? document.querySelector('textarea');
+    ?? document.querySelector('textarea')
+    ?? document.querySelector('div[contenteditable="true"][role="textbox"]')
+    ?? document.querySelector('[contenteditable="true"][aria-label*="Ask"]')
+    ?? document.querySelector('[contenteditable="true"][aria-placeholder]')
+    ?? document.querySelector('[contenteditable="true"]');
 
   if (!input) throw new Error('Perplexity input not found');
 
   input.focus();
   await sleep(200);
 
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    'value'
-  )?.set;
-
-  if (nativeInputValueSetter) {
-    nativeInputValueSetter.call(input, message);
+  if (input.tagName === 'TEXTAREA') {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value'
+    )?.set;
+    if (setter) setter.call(input, message);
+    else input.value = message;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.execCommand('selectAll', false, undefined);
+    document.execCommand('delete', false, undefined);
+    document.execCommand('insertText', false, message);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
   }
 
   await sleep(300);
 
   const sendBtn = document.querySelector('button[aria-label="Submit"]')
+    ?? document.querySelector('button[aria-label*="Submit"]')
+    ?? document.querySelector('button[aria-label*="Send"]')
+    ?? document.querySelector('button[data-testid*="submit"]')
     ?? document.querySelector('button[type="submit"]')
     ?? [...document.querySelectorAll('button')].find(
         (b) => b.getAttribute('aria-label')?.toLowerCase().includes('submit')

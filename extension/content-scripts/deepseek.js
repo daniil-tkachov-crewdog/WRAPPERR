@@ -61,9 +61,18 @@ async function waitForResponse() {
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      const isStreaming = !!document.querySelector(
-        'button[aria-label*="Stop"], [class*="thinking"], [class*="loading"], [class*="generating"]'
+      // Narrow streaming detection: `[class*="loading"]` matched random skeleton loaders elsewhere
+      // on the page (sidebar, settings drawer) and prevented waitForResponse from ever resolving.
+      // Prefer the Stop button (only rendered while a reply is generating) plus a scoped check
+      // for an in-progress class on the last message itself.
+      const stopBtn = document.querySelector(
+        'button[aria-label*="Stop"], div[role="button"][aria-label*="Stop"], button[class*="stop"]'
       );
+      const lastIsStreaming = last && (
+        last.matches('[class*="streaming"], [class*="generating"]') ||
+        last.querySelector('[class*="streaming"], [class*="generating"]')
+      );
+      const isStreaming = !!(stopBtn || lastIsStreaming);
       if (isStreaming) {
         stableCount = 0;
         lastText = text;

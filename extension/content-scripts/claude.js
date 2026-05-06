@@ -54,7 +54,12 @@ async function waitForResponse() {
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      const isStreaming = !!document.querySelector('[data-is-streaming="true"]');
+      // Scope the streaming check to the last message's ancestor chain, not the whole document.
+      // A page-wide `[data-is-streaming="true"]` query can match unrelated UI (sidebar previews,
+      // other open tabs) and keep waitForResponse pinned forever after the actual reply is done.
+      const isStreaming = last
+        ? !!last.closest('[data-is-streaming="true"]')
+        : !!document.querySelector('[data-is-streaming="true"]');
       if (isStreaming) {
         stableCount = 0;
         lastText = text;
