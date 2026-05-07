@@ -30,6 +30,19 @@
       "matches": ["https://*.onrender.com/*", "http://localhost:3000/*"],
       "js": ["content-scripts/wrapperr-bridge.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://grok.com/*",
+        "https://www.perplexity.ai/*",
+        "https://gemini.google.com/*",
+        "https://chat.deepseek.com/*"
+      ],
+      "js": ["content-scripts/_wrapperr-net-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {

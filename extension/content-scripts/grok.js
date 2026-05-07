@@ -53,8 +53,10 @@ async function injectMessage(message) {
 // waitForResponse delegates to the shared MutationObserver helper. Grok-specific signals are
 // the least reliable of any AI we drive — selectors here are speculative and may need a DOM
 // dump to nail down. Streaming gate is the Stop button.
-function waitForResponse() {
+function waitForResponse(sentAt) {
   return wrapperrWaitForResponse({
+    sentAt,
+    // Grok endpoint pattern speculative; leave permissive.
     responseSelector:
       '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]',
     getStreaming: () => !!document.querySelector(
@@ -67,18 +69,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type !== 'WRAPPERR_INJECT') return;
+if (!window.__wrapperrAIListenerOn) {
+  window.__wrapperrAIListenerOn = true;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== 'WRAPPERR_INJECT') return;
 
-  (async () => {
-    try {
-      await injectMessage(msg.message);
-      const text = await waitForResponse();
-      sendResponse({ text });
-    } catch (err) {
-      sendResponse({ text: '', error: err.message });
-    }
-  })();
+    (async () => {
+      try {
+        const sentAt = Date.now();
+        await injectMessage(msg.message);
+        const text = await waitForResponse(sentAt);
+        sendResponse({ text });
+      } catch (err) {
+        sendResponse({ text: '', error: err.message });
+      }
+    })();
 
-  return true;
-});
+    return true;
+  });
+}

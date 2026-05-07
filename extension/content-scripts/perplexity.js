@@ -55,8 +55,9 @@ async function injectMessage(message) {
 //   - Response container: prose / answer / markdown blocks.
 //   - Streaming gate: Stop button OR broad spinner classes. The broad selectors here can be
 //     noisy; if they match unrelated UI we may need to scope tighter in a follow-up.
-function waitForResponse() {
+function waitForResponse(sentAt) {
   return wrapperrWaitForResponse({
+    sentAt,
     responseSelector: '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown',
     getStreaming: () => !!document.querySelector(
       'button[aria-label*="Stop"], [class*="loading"], [aria-label*="loading"], [class*="Spinner"]'
@@ -68,18 +69,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type !== 'WRAPPERR_INJECT') return;
+if (!window.__wrapperrAIListenerOn) {
+  window.__wrapperrAIListenerOn = true;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== 'WRAPPERR_INJECT') return;
 
-  (async () => {
-    try {
-      await injectMessage(msg.message);
-      const text = await waitForResponse();
-      sendResponse({ text });
-    } catch (err) {
-      sendResponse({ text: '', error: err.message });
-    }
-  })();
+    (async () => {
+      try {
+        const sentAt = Date.now();
+        await injectMessage(msg.message);
+        const text = await waitForResponse(sentAt);
+        sendResponse({ text });
+      } catch (err) {
+        sendResponse({ text: '', error: err.message });
+      }
+    })();
 
-  return true;
-});
+    return true;
+  });
+}

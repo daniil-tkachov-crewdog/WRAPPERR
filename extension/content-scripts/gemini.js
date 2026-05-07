@@ -38,8 +38,11 @@ async function injectMessage(message) {
 //     Gemini only renders the copy/thumbs/share toolbar AFTER generation completes, so its
 //     appearance is a strong positive done-signal. Without this gate, Gemini truncates because
 //     mid-stream pauses look like "stable text" before the response finishes.
-function waitForResponse() {
+function waitForResponse(sentAt) {
   return wrapperrWaitForResponse({
+    sentAt,
+    // Gemini's streaming endpoint URL is hard to pin down (Google internal RPC). Leave urlMatch
+    // off — any streaming POST started after sentAt is a candidate.
     responseSelector: '.model-response-text, [class*="model-response"], .response-container',
     getStreaming: () => {
       const isLoading = !!document.querySelector(
@@ -57,18 +60,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type !== 'WRAPPERR_INJECT') return;
+if (!window.__wrapperrAIListenerOn) {
+  window.__wrapperrAIListenerOn = true;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== 'WRAPPERR_INJECT') return;
 
-  (async () => {
-    try {
-      await injectMessage(msg.message);
-      const text = await waitForResponse();
-      sendResponse({ text });
-    } catch (err) {
-      sendResponse({ text: '', error: err.message });
-    }
-  })();
+    (async () => {
+      try {
+        const sentAt = Date.now();
+        await injectMessage(msg.message);
+        const text = await waitForResponse(sentAt);
+        sendResponse({ text });
+      } catch (err) {
+        sendResponse({ text: '', error: err.message });
+      }
+    })();
 
-  return true;
-});
+    return true;
+  });
+}

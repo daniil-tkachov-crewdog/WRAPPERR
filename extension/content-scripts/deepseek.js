@@ -43,8 +43,10 @@ async function injectMessage(message) {
 //   - Streaming = Stop button OR scoped streaming/generating class on the last message. The
 //     previous page-wide [class*="loading"] selector matched sidebar/skeleton loaders and
 //     pinned waitForResponse forever.
-function waitForResponse() {
+function waitForResponse(sentAt) {
   return wrapperrWaitForResponse({
+    sentAt,
+    urlMatch: (url) => /\/api\/v\d+\/chat\/completion/.test(url),
     responseSelector:
       '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])',
     getStreaming: (last) => {
@@ -64,18 +66,22 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type !== 'WRAPPERR_INJECT') return;
+if (!window.__wrapperrAIListenerOn) {
+  window.__wrapperrAIListenerOn = true;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== 'WRAPPERR_INJECT') return;
 
-  (async () => {
-    try {
-      await injectMessage(msg.message);
-      const text = await waitForResponse();
-      sendResponse({ text });
-    } catch (err) {
-      sendResponse({ text: '', error: err.message });
-    }
-  })();
+    (async () => {
+      try {
+        const sentAt = Date.now();
+        await injectMessage(msg.message);
+        const text = await waitForResponse(sentAt);
+        sendResponse({ text });
+      } catch (err) {
+        sendResponse({ text: '', error: err.message });
+      }
+    })();
 
-  return true;
-});
+    return true;
+  });
+}
