@@ -94,4 +94,59 @@
       headers: response.headers,
     });
   };
+
+  // -------- WebSocket hook --------
+  // ChatGPT (and increasingly other AIs) returns a conduit JWT from the chat POST and then
+  // streams the actual reply over a WebSocket connection. The fetch hook above only sees the
+  // JWT response; the message text is in the WS frames. We Proxy window.WebSocket so
+  // instanceof and most introspection still work, listen to incoming string frames, accumulate
+  // them, and dispatch a streamComplete-style event after a short debounce of silence (real
+  // chat responses always end with a quiet period before the next message). Only string frames
+  // are accumulated — binary frames are skipped because the parser is text-only.
+  const origWebSocket = window.WebSocket;
+  if (origWebSocket && !window.__wrapperrWSHooked) {
+    window.__wrapperrWSHooked = true;
+    const SILENCE_DEBOUNCE_MS = 1500;
+
+    window.WebSocket = new Proxy(origWebSocket, {
+      construct(target, args) {
+        const ws = Reflect.construct(target, args);
+        const url = typeof args[0] === 'string' ? args[0] : (args[0]?.toString?.() || '');
+        if (!url || (!url.startsWith('wss://') && !url.startsWith('ws://'))) return ws;
+
+        const id = ++counter;
+        const startedAt = Date.now();
+        let body = '';
+        let endTimer = null;
+        let endedFlag = false;
+
+        function flushEnd() {
+          if (endedFlag) return;
+          endedFlag = true;
+          if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+          post({ type: 'end', id, url, startedAt, body });
+        }
+
+        post({ type: 'start', id, url, startedAt });
+
+        try {
+          ws.addEventListener('message', (event) => {
+            // Only accumulate string frames; binary (Blob/ArrayBuffer) is rare for AI streaming.
+            if (typeof event.data !== 'string' || !event.data) return;
+            // Append a separator newline so SSE-style block parsing works on accumulated frames.
+            body += event.data + '\n\n';
+            if (endTimer) clearTimeout(endTimer);
+            endTimer = setTimeout(flushEnd, SILENCE_DEBOUNCE_MS);
+          });
+          ws.addEventListener('close', flushEnd);
+          ws.addEventListener('error', flushEnd);
+        } catch {
+          // If the AI site blocks event listener attachment for any reason, swallow — the page
+          // still functions normally; we just don't capture this WS.
+        }
+
+        return ws;
+      },
+    });
+  }
 })();

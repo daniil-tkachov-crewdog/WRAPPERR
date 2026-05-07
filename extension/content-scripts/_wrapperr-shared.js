@@ -132,11 +132,10 @@ function wrapperrParseStreamBody(body) {
       const obj = JSON.parse(payload);
       applyExtract(tryExtract(obj));
     } catch {
-      // Not JSON — could be a plain-text token. Append as-is if it looks like text.
-      if (payload && payload.length < 1000) {
-        result += payload;
-        appendedAnything = true;
-      }
+      // Unparseable payload — skip. Real streaming AI APIs always send JSON in data: fields.
+      // The previous fallback that appended raw text caused conduit JWTs (ChatGPT auth bootstrap)
+      // to bleed through as the "response", since SSE responses with raw JWT bodies parse-fail
+      // here.
     }
   }
 
@@ -151,6 +150,16 @@ function wrapperrParseStreamBody(body) {
       } catch {}
     }
   }
+
+  // Defensive: if either result or replaceMode candidate is JWT-shaped, treat as empty. JWTs
+  // (3 base64url segments separated by dots, no whitespace, length > 100) appear in conduit
+  // bootstrap responses and should never be surfaced as assistant content.
+  function looksLikeJWT(s) {
+    if (!s || s.length < 100) return false;
+    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s.trim());
+  }
+  if (looksLikeJWT(result)) result = '';
+  if (looksLikeJWT(lastFullMessage)) lastFullMessage = '';
 
   // Replace mode wins if it produced more text than appended deltas.
   if (lastFullMessage.length > result.length) return lastFullMessage;
