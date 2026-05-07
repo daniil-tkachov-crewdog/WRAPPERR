@@ -35,58 +35,80 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: poll the last assistant bubble until text stops changing AND no streaming
-// indicator is present for STABLE_TICKS consecutive checks (~6.4s). ChatGPT shows a "Stop
-// generating" / "Stop streaming" button while a response is being produced and removes it when
-// done; we treat the presence of that button as a hard "still streaming" signal. We capture the
-// longer of innerText / textContent because innerText silently drops content inside collapsed or
-// off-screen blocks during streaming. The naive 4-tick / innerText-only version was firing during
-// brief mid-stream pauses and capturing a partial response.
+// waitForResponse: adaptive completion detection.
+// Polls every 200ms (down from 800ms). Two-phase stability gate:
+//   - If we observe the Stop button transition from present -> absent during this call,
+//     we treat that as positive proof the AI finished. After that, ~1.5s of unchanged text
+//     is enough to lock in the answer (SHORT_STABLE_MS).
+//   - If we never see a streaming indicator (rare on ChatGPT, more common on minimal AIs),
+//     fall back to ~6.4s of stability before resolving (LONG_STABLE_MS).
+// initialCount gate prevents resolving on the prior assistant message before the new one mounts.
+// Captures the longer of innerText/textContent so virtualized blocks aren't dropped.
 async function waitForResponse() {
-  // Wait for streaming to start
-  await sleep(1500);
+  const initialCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
 
   return new Promise((resolve) => {
-    let lastText = '';
-    let stableCount = 0;
-    const STABLE_TICKS = 8;
-    const TICK_MS = 800;
+    const startTime = Date.now();
     const HARD_TIMEOUT_MS = 240000;
+    const SHORT_STABLE_MS = 1500;
+    const LONG_STABLE_MS = 6400;
+    const TICK_MS = 200;
 
-    const interval = setInterval(() => {
+    let lastText = '';
+    let lastChangeAt = Date.now();
+    let sawStreamingEnd = false;
+    let prevStreaming = false;
+    let resolved = false;
+
+    function tick() {
+      if (resolved) return;
+      const now = Date.now();
+      const elapsed = now - startTime;
+
+      if (elapsed >= HARD_TIMEOUT_MS) {
+        finish(lastText || 'No response received.');
+        return;
+      }
+
       const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
+      if (messages.length <= initialCount) {
+        setTimeout(tick, TICK_MS);
+        return;
+      }
+
       const last = messages[messages.length - 1];
       const innerText = last?.innerText?.trim() ?? '';
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Stop button is rendered only while the response is streaming.
-      const isStreaming = !!document.querySelector(
+      const streaming = !!document.querySelector(
         'button[aria-label*="Stop"], button[data-testid="stop-button"]'
       );
+      if (prevStreaming && !streaming) sawStreamingEnd = true;
+      prevStreaming = streaming;
 
-      if (isStreaming) {
-        stableCount = 0;
+      if (text !== lastText) {
         lastText = text;
+        lastChangeAt = now;
+      }
+
+      const stableMs = now - lastChangeAt;
+      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
+
+      if (text && !streaming && stableMs >= requiredStable) {
+        finish(text);
         return;
       }
 
-      if (text && text === lastText) {
-        stableCount++;
-        if (stableCount >= STABLE_TICKS) {
-          clearInterval(interval);
-          resolve(text);
-        }
-      } else {
-        lastText = text;
-        stableCount = 0;
-      }
-    }, TICK_MS);
+      setTimeout(tick, TICK_MS);
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
-      resolve(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
+    function finish(text) {
+      resolved = true;
+      resolve(text);
+    }
+
+    setTimeout(tick, TICK_MS);
   });
 }
 

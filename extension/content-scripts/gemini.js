@@ -32,64 +32,86 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Gemini truncated responses badly with the previous 4-tick / innerText-only
-// approach because Gemini streams in bursts with multi-second pauses; the heuristic fired during a
-// pause and captured ~1/3 of the answer. Now: STABLE_TICKS = 8 (~6.4s), reset whenever a loading
-// indicator is visible, and additionally require the post-generation response-action toolbar
-// (thumbs up/down, copy) to be rendered — Gemini only mounts that toolbar after streaming
-// completes. Capture textContent in addition to innerText since virtualized blocks were being
-// missed.
+// waitForResponse: Gemini-specific adaptive completion detection. The "streaming" state here
+// combines two signals: a loading indicator visible OR the response-actions toolbar (copy /
+// thumbs / share) NOT yet mounted. Gemini only renders the actions toolbar after generation
+// completes, so its appearance is a strong positive done-signal. When we observe the streaming
+// composite flip true→false during this call, we use the short stability window; otherwise the
+// long fallback. initialCount gate prevents capturing the prior response.
 async function waitForResponse() {
-  await sleep(2000);
+  const initialCount = document.querySelectorAll(
+    '.model-response-text, [class*="model-response"], .response-container'
+  ).length;
 
   return new Promise((resolve) => {
-    let lastText = '';
-    let stableCount = 0;
-    const STABLE_TICKS = 8;
-    const TICK_MS = 800;
+    const startTime = Date.now();
     const HARD_TIMEOUT_MS = 240000;
+    const SHORT_STABLE_MS = 1500;
+    const LONG_STABLE_MS = 6400;
+    const TICK_MS = 200;
 
-    const interval = setInterval(() => {
+    let lastText = '';
+    let lastChangeAt = Date.now();
+    let sawStreamingEnd = false;
+    let prevStreaming = false;
+    let resolved = false;
+
+    function tick() {
+      if (resolved) return;
+      const now = Date.now();
+      const elapsed = now - startTime;
+
+      if (elapsed >= HARD_TIMEOUT_MS) {
+        finish(lastText || 'No response received.');
+        return;
+      }
+
       const responses = document.querySelectorAll(
         '.model-response-text, [class*="model-response"], .response-container'
       );
+      if (responses.length <= initialCount) {
+        setTimeout(tick, TICK_MS);
+        return;
+      }
+
       const last = responses[responses.length - 1];
       const innerText = last?.innerText?.trim() ?? '';
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Loading: blue progress / pending bubble.
       const isLoading = !!document.querySelector(
         '[class*="loading-indicator"], .pending-message, [class*="thinking"]'
       );
-      // Done-streaming signal: Gemini renders a toolbar (copy / thumbs / share) on the final
-      // message only after generation completes. If we don't find it yet, keep waiting.
-      const hasResponseActions = !!document.querySelector(
+      const hasActions = !!document.querySelector(
         'message-actions, [data-test-id*="response-actions"], button[aria-label*="Copy"], button[data-test-id*="copy-button"]'
       );
+      const streaming = isLoading || !hasActions;
 
-      if (isLoading || !hasResponseActions) {
-        stableCount = 0;
+      if (prevStreaming && !streaming) sawStreamingEnd = true;
+      prevStreaming = streaming;
+
+      if (text !== lastText) {
         lastText = text;
+        lastChangeAt = now;
+      }
+
+      const stableMs = now - lastChangeAt;
+      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
+
+      if (text && !streaming && stableMs >= requiredStable) {
+        finish(text);
         return;
       }
 
-      if (text && text === lastText) {
-        stableCount++;
-        if (stableCount >= STABLE_TICKS) {
-          clearInterval(interval);
-          resolve(text);
-        }
-      } else {
-        lastText = text;
-        stableCount = 0;
-      }
-    }, TICK_MS);
+      setTimeout(tick, TICK_MS);
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
-      resolve(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
+    function finish(text) {
+      resolved = true;
+      resolve(text);
+    }
+
+    setTimeout(tick, TICK_MS);
   });
 }
 

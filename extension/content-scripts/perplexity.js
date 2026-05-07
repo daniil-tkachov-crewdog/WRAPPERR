@@ -51,54 +51,75 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Perplexity's previous selector-loading combo was firing during stream pauses
-// and the response container was overly generic (any .prose / .markdown). We tighten to answer
-// blocks specifically, watch a Stop button as the streaming signal, broaden the loading sentinel,
-// and use the 8-tick / textContent strategy shared by the other AIs.
+// waitForResponse: Perplexity adaptive completion detection. Streaming gate combines a Stop
+// button and broad spinner classes; on the on→off transition we use the short stability window.
+// initialCount gate prevents capturing prior answers.
 async function waitForResponse() {
-  await sleep(2500);
+  const RESPONSE_SELECTOR = '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown';
+  const initialCount = document.querySelectorAll(RESPONSE_SELECTOR).length;
 
   return new Promise((resolve) => {
-    let lastText = '';
-    let stableCount = 0;
-    const STABLE_TICKS = 8;
-    const TICK_MS = 800;
+    const startTime = Date.now();
     const HARD_TIMEOUT_MS = 240000;
+    const SHORT_STABLE_MS = 1500;
+    const LONG_STABLE_MS = 6400;
+    const TICK_MS = 200;
 
-    const interval = setInterval(() => {
-      const answers = document.querySelectorAll(
-        '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown'
-      );
+    let lastText = '';
+    let lastChangeAt = Date.now();
+    let sawStreamingEnd = false;
+    let prevStreaming = false;
+    let resolved = false;
+
+    function tick() {
+      if (resolved) return;
+      const now = Date.now();
+      const elapsed = now - startTime;
+
+      if (elapsed >= HARD_TIMEOUT_MS) {
+        finish(lastText || 'No response received.');
+        return;
+      }
+
+      const answers = document.querySelectorAll(RESPONSE_SELECTOR);
+      if (answers.length <= initialCount) {
+        setTimeout(tick, TICK_MS);
+        return;
+      }
+
       const last = answers[answers.length - 1];
       const innerText = last?.innerText?.trim() ?? '';
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      const isStreaming = !!document.querySelector(
+      const streaming = !!document.querySelector(
         'button[aria-label*="Stop"], [class*="loading"], [aria-label*="loading"], [class*="Spinner"]'
       );
-      if (isStreaming) {
-        stableCount = 0;
+      if (prevStreaming && !streaming) sawStreamingEnd = true;
+      prevStreaming = streaming;
+
+      if (text !== lastText) {
         lastText = text;
+        lastChangeAt = now;
+      }
+
+      const stableMs = now - lastChangeAt;
+      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
+
+      if (text && !streaming && stableMs >= requiredStable) {
+        finish(text);
         return;
       }
 
-      if (text && text === lastText) {
-        stableCount++;
-        if (stableCount >= STABLE_TICKS) {
-          clearInterval(interval);
-          resolve(text);
-        }
-      } else {
-        lastText = text;
-        stableCount = 0;
-      }
-    }, TICK_MS);
+      setTimeout(tick, TICK_MS);
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
-      resolve(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
+    function finish(text) {
+      resolved = true;
+      resolve(text);
+    }
+
+    setTimeout(tick, TICK_MS);
   });
 }
 

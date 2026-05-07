@@ -32,56 +32,75 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: poll Claude's last assistant message and resolve once data-is-streaming has been
-// false (or absent) for STABLE_TICKS consecutive checks AND the captured text has stopped
-// changing. data-is-streaming is the most reliable "still generating" signal Claude exposes. We
-// capture the longer of innerText / textContent so collapsed code blocks or wrapped content
-// aren't missed.
+// waitForResponse: adaptive completion detection (200ms polling, short stability after a
+// confirmed streaming on→off transition, longer fallback otherwise). Streaming is detected via
+// the last message's ancestor `[data-is-streaming="true"]` — scoped so unrelated UI doesn't
+// keep us pinned. initialCount gate prevents resolving on the previous assistant message.
 async function waitForResponse() {
-  await sleep(2000);
+  const initialCount = document.querySelectorAll('.font-claude-message').length;
 
   return new Promise((resolve) => {
-    let lastText = '';
-    let stableCount = 0;
-    const STABLE_TICKS = 8;
-    const TICK_MS = 800;
+    const startTime = Date.now();
     const HARD_TIMEOUT_MS = 240000;
+    const SHORT_STABLE_MS = 1500;
+    const LONG_STABLE_MS = 6400;
+    const TICK_MS = 200;
 
-    const interval = setInterval(() => {
+    let lastText = '';
+    let lastChangeAt = Date.now();
+    let sawStreamingEnd = false;
+    let prevStreaming = false;
+    let resolved = false;
+
+    function tick() {
+      if (resolved) return;
+      const now = Date.now();
+      const elapsed = now - startTime;
+
+      if (elapsed >= HARD_TIMEOUT_MS) {
+        finish(lastText || 'No response received.');
+        return;
+      }
+
       const allMessages = document.querySelectorAll('.font-claude-message');
+      if (allMessages.length <= initialCount) {
+        setTimeout(tick, TICK_MS);
+        return;
+      }
+
       const last = allMessages[allMessages.length - 1];
       const innerText = last?.innerText?.trim() ?? '';
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      // Scope the streaming check to the last message's ancestor chain, not the whole document.
-      // A page-wide `[data-is-streaming="true"]` query can match unrelated UI (sidebar previews,
-      // other open tabs) and keep waitForResponse pinned forever after the actual reply is done.
-      const isStreaming = last
+      const streaming = last
         ? !!last.closest('[data-is-streaming="true"]')
         : !!document.querySelector('[data-is-streaming="true"]');
-      if (isStreaming) {
-        stableCount = 0;
+      if (prevStreaming && !streaming) sawStreamingEnd = true;
+      prevStreaming = streaming;
+
+      if (text !== lastText) {
         lastText = text;
+        lastChangeAt = now;
+      }
+
+      const stableMs = now - lastChangeAt;
+      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
+
+      if (text && !streaming && stableMs >= requiredStable) {
+        finish(text);
         return;
       }
 
-      if (text && text === lastText) {
-        stableCount++;
-        if (stableCount >= STABLE_TICKS) {
-          clearInterval(interval);
-          resolve(text);
-        }
-      } else {
-        lastText = text;
-        stableCount = 0;
-      }
-    }, TICK_MS);
+      setTimeout(tick, TICK_MS);
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
-      resolve(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
+    function finish(text) {
+      resolved = true;
+      resolve(text);
+    }
+
+    setTimeout(tick, TICK_MS);
   });
 }
 

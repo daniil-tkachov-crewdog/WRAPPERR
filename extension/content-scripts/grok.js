@@ -50,55 +50,77 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Grok currently times out on capture (response selector candidates are speculative
-// — the Grok DOM uses ambiguous classes). We add a generic "stop button" streaming gate (Grok shows
-// a stop / square icon while generating), an 8-tick stability window, and broaden response-container
-// selectors. If this still times out the user should share the final message DOM dump and we'll
-// pin the selector in a follow-up.
+// waitForResponse: Grok adaptive completion detection. Grok exposes the least reliable signals
+// of any AI we drive — selectors are speculative. We try the Stop button as the streaming gate;
+// if we observe the on→off transition, short stability window kicks in. Otherwise we fall back
+// to the longer window. initialCount gate prevents capturing prior responses.
 async function waitForResponse() {
-  await sleep(2000);
+  const RESPONSE_SELECTOR =
+    '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]';
+  const initialCount = document.querySelectorAll(RESPONSE_SELECTOR).length;
 
   return new Promise((resolve) => {
-    let lastText = '';
-    let stableCount = 0;
-    const STABLE_TICKS = 8;
-    const TICK_MS = 800;
+    const startTime = Date.now();
     const HARD_TIMEOUT_MS = 240000;
+    const SHORT_STABLE_MS = 1500;
+    const LONG_STABLE_MS = 6400;
+    const TICK_MS = 200;
 
-    const interval = setInterval(() => {
-      const messages = document.querySelectorAll(
-        '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]'
-      );
+    let lastText = '';
+    let lastChangeAt = Date.now();
+    let sawStreamingEnd = false;
+    let prevStreaming = false;
+    let resolved = false;
+
+    function tick() {
+      if (resolved) return;
+      const now = Date.now();
+      const elapsed = now - startTime;
+
+      if (elapsed >= HARD_TIMEOUT_MS) {
+        finish(lastText || 'No response received.');
+        return;
+      }
+
+      const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+      if (messages.length <= initialCount) {
+        setTimeout(tick, TICK_MS);
+        return;
+      }
+
       const last = messages[messages.length - 1];
       const innerText = last?.innerText?.trim() ?? '';
       const textContent = last?.textContent?.trim() ?? '';
       const text = textContent.length > innerText.length ? textContent : innerText;
 
-      const isStreaming = !!document.querySelector(
-        'button[aria-label*="Stop"], button[aria-label*="stop"], [class*="loading"]'
+      const streaming = !!document.querySelector(
+        'button[aria-label*="Stop"], button[aria-label*="stop"]'
       );
-      if (isStreaming) {
-        stableCount = 0;
+      if (prevStreaming && !streaming) sawStreamingEnd = true;
+      prevStreaming = streaming;
+
+      if (text !== lastText) {
         lastText = text;
+        lastChangeAt = now;
+      }
+
+      const stableMs = now - lastChangeAt;
+      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
+
+      if (text && !streaming && stableMs >= requiredStable) {
+        finish(text);
         return;
       }
 
-      if (text && text === lastText) {
-        stableCount++;
-        if (stableCount >= STABLE_TICKS) {
-          clearInterval(interval);
-          resolve(text);
-        }
-      } else {
-        lastText = text;
-        stableCount = 0;
-      }
-    }, TICK_MS);
+      setTimeout(tick, TICK_MS);
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
-      resolve(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
+    function finish(text) {
+      resolved = true;
+      resolve(text);
+    }
+
+    setTimeout(tick, TICK_MS);
   });
 }
 
