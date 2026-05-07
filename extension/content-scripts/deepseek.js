@@ -1,27 +1,19 @@
+// injectMessage: locate DeepSeek's composer and submit.
 async function injectMessage(message) {
   const input = document.querySelector('textarea#chat-input')
     ?? document.querySelector('textarea[placeholder*="Send"]')
     ?? document.querySelector('textarea[placeholder*="Message"]')
     ?? document.querySelector('textarea');
-
   if (!input) throw new Error('DeepSeek input not found');
 
   input.focus();
   await sleep(200);
 
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    'value'
-  )?.set;
-
-  if (nativeInputValueSetter) {
-    nativeInputValueSetter.call(input, message);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  } else {
-    input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+  if (setter) setter.call(input, message);
+  else input.value = message;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
 
   await sleep(300);
 
@@ -38,50 +30,45 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse delegates to the shared MutationObserver helper. DeepSeek-specific signals:
-//   - Response container: ds-markdown / message-content / assistant rows.
-//   - Streaming = Stop button OR scoped streaming/generating class on the last message. The
-//     previous page-wide [class*="loading"] selector matched sidebar/skeleton loaders and
-//     pinned waitForResponse forever.
-function waitForResponse(sentAt) {
-  return wrapperrWaitForResponse({
-    sentAt,
-    urlMatch: (url) => /\/api\/v\d+\/chat\/completion/.test(url),
-    responseSelector:
-      '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])',
-    getStreaming: (last) => {
-      const stopBtn = document.querySelector(
-        'button[aria-label*="Stop"], div[role="button"][aria-label*="Stop"], button[class*="stop"]'
-      );
-      const lastIsStreaming = last && (
-        last.matches('[class*="streaming"], [class*="generating"]') ||
-        last.querySelector('[class*="streaming"], [class*="generating"]')
-      );
-      return !!(stopBtn || lastIsStreaming);
-    },
-  });
+const RESPONSE_SELECTOR =
+  '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])';
+
+function getBaseline() {
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const count = messages.length;
+  const last = messages[count - 1];
+  return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function getCurrentState({ sentAt, baselineCount }) {
+  const netText = wrapperrReadBestStreamText(sentAt);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  if (messages.length <= (baselineCount || 0)) return '';
+  return wrapperrBestText(messages[messages.length - 1]);
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type !== 'WRAPPERR_INJECT') return;
-
-    (async () => {
-      try {
-        const sentAt = Date.now();
-        await injectMessage(msg.message);
-        const text = await waitForResponse(sentAt);
-        sendResponse({ text });
-      } catch (err) {
-        sendResponse({ text: '', error: err.message });
-      }
-    })();
-
-    return true;
+    if (msg.type === 'WRAPPERR_INJECT_ONLY') {
+      (async () => {
+        try {
+          const baseline = getBaseline();
+          await injectMessage(msg.message);
+          sendResponse({ ok: true, baseline });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+    if (msg.type === 'WRAPPERR_GET_STATE') {
+      try { sendResponse({ text: getCurrentState(msg) }); }
+      catch (err) { sendResponse({ text: '', error: err.message }); }
+      return false;
+    }
   });
 }

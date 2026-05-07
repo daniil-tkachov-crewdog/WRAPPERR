@@ -1,3 +1,5 @@
+// injectMessage: locate ChatGPT's composer (textarea OR contenteditable) and submit the
+// message. Fires native input events so React state updates correctly.
 async function injectMessage(message) {
   const input = document.querySelector('#prompt-textarea')
     ?? document.querySelector('textarea[data-id="root"]')
@@ -7,15 +9,11 @@ async function injectMessage(message) {
   input.focus();
 
   if (input.tagName === 'TEXTAREA') {
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      'value'
-    )?.set;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
     if (setter) setter.call(input, message);
     else input.value = message;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   } else {
-    // contenteditable (current ChatGPT uses ProseMirror-style div)
     input.textContent = '';
     document.execCommand('insertText', false, message);
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
@@ -35,45 +33,58 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse delegates to the shared MutationObserver helper. ChatGPT-specific signals:
-//   - Response container: any [data-message-author-role="assistant"] bubble
-//   - Streaming indicator: the Stop button rendered while a reply is generating
-function waitForResponse(sentAt) {
-  return wrapperrWaitForResponse({
-    sentAt,
-    urlMatch: (url) => /\/backend-api\/(f\/)?conversation/.test(url),
-    responseSelector: '[data-message-author-role="assistant"]',
-    getStreaming: () => !!document.querySelector(
-      'button[aria-label*="Stop"], button[data-testid="stop-button"]'
-    ),
-  });
+// AI-specific selector for assistant message bubbles. Used both for baseline counting (so we
+// don't return prior responses) and for DOM-scrape fallback when network capture yields nothing.
+const RESPONSE_SELECTOR = '[data-message-author-role="assistant"]';
+
+// getBaseline: snapshot the assistant-message count + last text BEFORE injection, so the SW can
+// distinguish the new response from any prior one.
+function getBaseline() {
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const count = messages.length;
+  const last = messages[count - 1];
+  return { count, text: last ? wrapperrBestText(last) : '' };
+}
+
+// getCurrentState: synchronous read of the current best-known response text. Tries the network
+// capture first (works in background tabs because WS frames fire onmessage handlers regardless
+// of focus); falls back to DOM scraping when the parser yields nothing. Returns '' when neither
+// path has produced a response distinct from the baseline yet.
+function getCurrentState({ sentAt, baselineCount }) {
+  const netText = wrapperrReadBestStreamText(sentAt);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  if (messages.length <= (baselineCount || 0)) return '';
+  return wrapperrBestText(messages[messages.length - 1]);
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Guard against duplicate listeners. The service worker re-injects this script on every send
-// (chrome.scripting.executeScript runs the file again whether or not it was already loaded).
-// Without the guard, each send adds another onMessage listener and the same WRAPPERR_INJECT
-// fires through all of them in parallel — typing duplicates into the composer and racing
-// sendResponse calls.
+// Listener guard: see comment in shared file. SW re-injection would otherwise stack listeners.
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type !== 'WRAPPERR_INJECT') return;
-
-    (async () => {
+    if (msg.type === 'WRAPPERR_INJECT_ONLY') {
+      (async () => {
+        try {
+          const baseline = getBaseline();
+          await injectMessage(msg.message);
+          sendResponse({ ok: true, baseline });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+    if (msg.type === 'WRAPPERR_GET_STATE') {
       try {
-        const sentAt = Date.now();
-        await injectMessage(msg.message);
-        const text = await waitForResponse(sentAt);
-        sendResponse({ text });
+        sendResponse({ text: getCurrentState(msg) });
       } catch (err) {
         sendResponse({ text: '', error: err.message });
       }
-    })();
-
-    return true;
+      return false;
+    }
   });
 }

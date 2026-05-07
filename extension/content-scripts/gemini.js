@@ -1,20 +1,16 @@
+// injectMessage: locate Gemini's rich-textarea / .ql-editor composer and submit.
 async function injectMessage(message) {
-  // Gemini uses a rich-textarea or .ql-editor
   const input = document.querySelector('rich-textarea .ql-editor')
     ?? document.querySelector('div[contenteditable="true"].ql-editor')
     ?? document.querySelector('[contenteditable="true"][data-placeholder]')
     ?? document.querySelector('[contenteditable="true"]');
-
   if (!input) throw new Error('Gemini input not found');
 
   input.focus();
   await sleep(200);
 
-  // Clear
   document.execCommand('selectAll', false, undefined);
   document.execCommand('delete', false, undefined);
-
-  // Insert text
   document.execCommand('insertText', false, message);
 
   await sleep(300);
@@ -32,50 +28,44 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse delegates to the shared MutationObserver helper. Gemini-specific signals:
-//   - Response container: .model-response-text and friends.
-//   - Streaming = (loading indicator visible) OR (response-actions toolbar not yet rendered).
-//     Gemini only renders the copy/thumbs/share toolbar AFTER generation completes, so its
-//     appearance is a strong positive done-signal. Without this gate, Gemini truncates because
-//     mid-stream pauses look like "stable text" before the response finishes.
-function waitForResponse(sentAt) {
-  return wrapperrWaitForResponse({
-    sentAt,
-    // Gemini's streaming endpoint URL is hard to pin down (Google internal RPC). Leave urlMatch
-    // off — any streaming POST started after sentAt is a candidate.
-    responseSelector: '.model-response-text, [class*="model-response"], .response-container',
-    getStreaming: () => {
-      const isLoading = !!document.querySelector(
-        '[class*="loading-indicator"], .pending-message, [class*="thinking"]'
-      );
-      const hasActions = !!document.querySelector(
-        'message-actions, [data-test-id*="response-actions"], button[aria-label*="Copy"], button[data-test-id*="copy-button"]'
-      );
-      return isLoading || !hasActions;
-    },
-  });
+const RESPONSE_SELECTOR = '.model-response-text, [class*="model-response"], .response-container';
+
+function getBaseline() {
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const count = messages.length;
+  const last = messages[count - 1];
+  return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function getCurrentState({ sentAt, baselineCount }) {
+  const netText = wrapperrReadBestStreamText(sentAt);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  if (messages.length <= (baselineCount || 0)) return '';
+  return wrapperrBestText(messages[messages.length - 1]);
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type !== 'WRAPPERR_INJECT') return;
-
-    (async () => {
-      try {
-        const sentAt = Date.now();
-        await injectMessage(msg.message);
-        const text = await waitForResponse(sentAt);
-        sendResponse({ text });
-      } catch (err) {
-        sendResponse({ text: '', error: err.message });
-      }
-    })();
-
-    return true;
+    if (msg.type === 'WRAPPERR_INJECT_ONLY') {
+      (async () => {
+        try {
+          const baseline = getBaseline();
+          await injectMessage(msg.message);
+          sendResponse({ ok: true, baseline });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+    if (msg.type === 'WRAPPERR_GET_STATE') {
+      try { sendResponse({ text: getCurrentState(msg) }); }
+      catch (err) { sendResponse({ text: '', error: err.message }); }
+      return false;
+    }
   });
 }

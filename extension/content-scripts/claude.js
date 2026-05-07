@@ -1,24 +1,20 @@
+// injectMessage: locate Claude's ProseMirror contenteditable, clear it, insert the message,
+// and submit via the send button (or Enter as fallback).
 async function injectMessage(message) {
-  // Claude uses a ProseMirror contenteditable div
   const input = document.querySelector('[contenteditable="true"].ProseMirror')
     ?? document.querySelector('div[contenteditable="true"][data-placeholder]')
     ?? document.querySelector('div[contenteditable="true"]');
-
   if (!input) throw new Error('Claude input not found');
 
   input.focus();
   await sleep(200);
 
-  // Clear existing content
   document.execCommand('selectAll', false, undefined);
   document.execCommand('delete', false, undefined);
-
-  // Insert text
   document.execCommand('insertText', false, message);
 
   await sleep(300);
 
-  // Click send button
   const sendBtn = document.querySelector('button[aria-label="Send Message"]')
     ?? document.querySelector('button[type="submit"]')
     ?? [...document.querySelectorAll('button')].find(
@@ -32,43 +28,44 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse delegates to the shared MutationObserver helper. Claude-specific signals:
-//   - Response container: .font-claude-message bubbles (assistant only — user messages use a
-//     different class)
-//   - Streaming indicator: the last message's ancestor [data-is-streaming="true"]. We scope it
-//     to the last message's ancestor chain so unrelated UI elsewhere on the page doesn't keep
-//     us pinned forever.
-function waitForResponse(sentAt) {
-  return wrapperrWaitForResponse({
-    sentAt,
-    urlMatch: (url) => /\/chat_conversations\/.+\/(completion|retry_completion)/.test(url),
-    responseSelector: '.font-claude-message',
-    getStreaming: (last) => last
-      ? !!last.closest('[data-is-streaming="true"]')
-      : !!document.querySelector('[data-is-streaming="true"]'),
-  });
+const RESPONSE_SELECTOR = '.font-claude-message';
+
+function getBaseline() {
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const count = messages.length;
+  const last = messages[count - 1];
+  return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function getCurrentState({ sentAt, baselineCount }) {
+  const netText = wrapperrReadBestStreamText(sentAt);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  if (messages.length <= (baselineCount || 0)) return '';
+  return wrapperrBestText(messages[messages.length - 1]);
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type !== 'WRAPPERR_INJECT') return;
-
-    (async () => {
-      try {
-        const sentAt = Date.now();
-        await injectMessage(msg.message);
-        const text = await waitForResponse(sentAt);
-        sendResponse({ text });
-      } catch (err) {
-        sendResponse({ text: '', error: err.message });
-      }
-    })();
-
-    return true;
+    if (msg.type === 'WRAPPERR_INJECT_ONLY') {
+      (async () => {
+        try {
+          const baseline = getBaseline();
+          await injectMessage(msg.message);
+          sendResponse({ ok: true, baseline });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+      return true;
+    }
+    if (msg.type === 'WRAPPERR_GET_STATE') {
+      try { sendResponse({ text: getCurrentState(msg) }); }
+      catch (err) { sendResponse({ text: '', error: err.message }); }
+      return false;
+    }
   });
 }

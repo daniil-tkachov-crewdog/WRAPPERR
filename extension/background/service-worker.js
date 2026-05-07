@@ -124,38 +124,103 @@ async function injectContentScript(tabId, ai) {
   }
 }
 
-// sendToAI: ensures the AI tab, injects its content script, and asks it to drive a single message.
-// If chrome.tabs.sendMessage fails because the tab has no listening receiver (e.g. tab navigated
-// or content script unloaded), we wipe tabMap[ai] so the *next* call rebuilds from scratch instead
-// of repeatedly hitting the same dead tab. We do NOT clear on content-script errors (those are
-// recoverable on the same tab).
+// sendToAI: orchestrates a single message round-trip.
+//   1. Ensure the AI tab exists and is on the right origin.
+//   2. Inject the shared helper + AI-specific content script.
+//   3. Send WRAPPERR_INJECT_ONLY to type the message and click send. The content script returns
+//      a baseline (count + text of the last assistant message before injection) so we can
+//      distinguish the new response from any prior one.
+//   4. Poll WRAPPERR_GET_STATE every POLL_MS. Each poll returns the current best-known text
+//      (from the network capture buffer or DOM scrape). We track stability with our own timer
+//      here in the SW context — never throttled by tab visibility, unlike timers inside the
+//      AI tab itself.
+//   5. Resolve when the text has been non-empty, distinct from baseline, and unchanged for
+//      STABLE_MS. Hard timeout at HARD_MS.
 async function sendToAI(ai, message, requestId) {
   try {
     const tabId = await ensureTab(ai);
     await injectContentScript(tabId, ai);
 
-    const response = await chrome.tabs.sendMessage(tabId, {
-      type: 'WRAPPERR_INJECT',
-      message,
-      requestId,
-    });
-
-    if (response?.error) throw new Error(response.error);
-    return response?.text ?? '';
-  } catch (err) {
-    const msg = err?.message || '';
-    if (
-      msg.includes('Receiving end does not exist') ||
-      msg.includes('No tab with id')
-    ) {
-      // Don't clear on "message port closed" / "channel closed" — those happen when the content
-      // script took longer than the channel allows but the tab itself is still healthy. Clearing
-      // tabMap on those errors caused fresh tabs to open on every retry.
-      delete tabMap[ai];
-      await persistTabMap();
+    let injectResp;
+    try {
+      injectResp = await chrome.tabs.sendMessage(tabId, {
+        type: 'WRAPPERR_INJECT_ONLY',
+        message,
+        requestId,
+      });
+    } catch (err) {
+      const msg = err?.message || '';
+      if (msg.includes('Receiving end does not exist') || msg.includes('No tab with id')) {
+        delete tabMap[ai];
+        await persistTabMap();
+      }
+      throw new Error(msg || 'Failed to communicate with AI tab');
     }
-    throw new Error(msg || 'Failed to communicate with AI tab');
+
+    if (!injectResp?.ok) {
+      throw new Error(injectResp?.error || 'Inject failed');
+    }
+
+    const sentAt = Date.now();
+    const baseline = injectResp.baseline || { count: 0, text: '' };
+    return await pollForResponse(tabId, ai, sentAt, baseline);
+  } catch (err) {
+    throw new Error(err?.message || 'Failed to communicate with AI tab');
   }
+}
+
+// pollForResponse: SW-side stability check. The tab itself never runs timers for this — its
+// content script just synchronously reads buffer + DOM on each GET_STATE. SW decides when the
+// response has stabilized.
+async function pollForResponse(tabId, ai, sentAt, baseline) {
+  const POLL_MS = 500;
+  const STABLE_MS = 1500;
+  const HARD_MS = 240000;
+
+  const start = Date.now();
+  let lastText = '';
+  let lastChangeAt = Date.now();
+
+  while (Date.now() - start < HARD_MS) {
+    let resp;
+    try {
+      resp = await chrome.tabs.sendMessage(tabId, {
+        type: 'WRAPPERR_GET_STATE',
+        sentAt,
+        baselineCount: baseline.count,
+        baselineText: baseline.text,
+      });
+    } catch (err) {
+      const msg = err?.message || '';
+      if (msg.includes('Receiving end does not exist') || msg.includes('No tab with id')) {
+        delete tabMap[ai];
+        await persistTabMap();
+        throw new Error(msg);
+      }
+      // Transient error — retry next poll.
+      await sleep(POLL_MS);
+      continue;
+    }
+
+    const text = (resp?.text || '').trim();
+
+    // Skip if it's the baseline itself (page hasn't rendered the new bubble yet).
+    if (text === (baseline.text || '').trim() || text === '') {
+      await sleep(POLL_MS);
+      continue;
+    }
+
+    if (text !== lastText) {
+      lastText = text;
+      lastChangeAt = Date.now();
+    } else if (Date.now() - lastChangeAt >= STABLE_MS) {
+      return text;
+    }
+
+    await sleep(POLL_MS);
+  }
+
+  return lastText || 'No response received.';
 }
 
 // Listen for messages from content scripts (wrapperr-bridge.js or AI scripts)

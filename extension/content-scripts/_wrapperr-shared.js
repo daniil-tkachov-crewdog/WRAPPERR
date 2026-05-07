@@ -1,28 +1,24 @@
-// Shared helpers for the AI content scripts. Two responsibilities:
-//   1. Bridge the MAIN-world fetch hook's window.postMessage events into in-isolated-world
-//      EventTarget signals that waitForResponse can listen on.
-//   2. Provide wrapperrWaitForResponse(), which races a network-based path (parses streamed
-//      response bodies captured by the fetch hook) against a DOM-based path (MutationObserver
-//      on the response container). Whichever produces non-empty text first wins.
+// Shared helpers for the AI content scripts. Three responsibilities:
+//   1. Bridge the MAIN-world fetch+WebSocket hook events into isolated-world state. Maintains
+//      mirror buffers (in-progress streams + recently completed streams) so the content script
+//      can answer GET_STATE polls synchronously without any cross-world async hops.
+//   2. Provide wrapperrParseStreamBody(body) — a generic SSE/NDJSON parser that handles
+//      ChatGPT, Claude, OpenAI-compat, and Gemini-style formats.
+//   3. Provide wrapperrReadBestStreamText(sentAt) — picks the longest valid parsed text from
+//      streams that started after sentAt.
 //
-// Why both paths: the network path works in fully background tabs (rAF doesn't matter) and is
-// usually faster, but it depends on us correctly parsing each AI's streaming format. The DOM
-// path is format-agnostic and works as a safety net when the network path's parser doesn't
-// understand the response. Together they cover focused-tab perf and background-tab reliability.
+// Key invariant: NO timers, NO async waits. The service worker drives all timing because tab
+// throttling makes every setTimeout/setInterval in this context unreliable.
 (() => {
-  // Idempotent setup — content scripts get re-injected via chrome.scripting.executeScript on
-  // every send, so we guard with a flag on window.
   if (window.__wrapperrNetBusInited) return;
   window.__wrapperrNetBusInited = true;
 
-  // EventTarget the wait helper subscribes to. Dispatches CustomEvent('streamComplete', detail).
-  const bus = new EventTarget();
-  window.__wrapperrNetBus = bus;
-
-  // Track in-flight streams so we can accumulate chunks across postMessage events.
-  const active = new Map();   // id -> { startedAt, url, body }
-  const completed = [];       // ring buffer of last 5 completed streams (debug / late subscribers)
-  window.__wrapperrCompletedStreams = completed;
+  // Mirror buffers exposed on window so the AI script's message handlers (and any future
+  // synchronous reader) can inspect state without further hops.
+  const inProgress = new Map();   // id -> { startedAt, url, body }
+  const completed = [];           // ring buffer (last 5 closed streams)
+  window.__wrapperrInProgress = inProgress;
+  window.__wrapperrCompleted = completed;
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
@@ -30,75 +26,57 @@
     if (!m || m.source !== 'wrapperr-net') return;
 
     if (m.type === 'start') {
-      active.set(m.id, { startedAt: m.startedAt, url: m.url, body: '' });
+      inProgress.set(m.id, { startedAt: m.startedAt, url: m.url, body: '' });
+    } else if (m.type === 'chunk') {
+      // Body in chunk events is cumulative — overwrite, don't append.
+      const existing = inProgress.get(m.id);
+      if (existing) existing.body = m.body;
+      else inProgress.set(m.id, { startedAt: m.startedAt, url: m.url, body: m.body });
     } else if (m.type === 'end') {
-      // The hook posts the full body in 'end' (it was buffering all along) — the start record
-      // may be missing if our listener was registered after start fired, so use the end body.
       const completedAt = Date.now();
       const detail = { startedAt: m.startedAt, completedAt, url: m.url, body: m.body || '' };
       completed.push(detail);
       if (completed.length > 5) completed.shift();
-      active.delete(m.id);
-      bus.dispatchEvent(new CustomEvent('streamComplete', { detail }));
+      inProgress.delete(m.id);
     } else if (m.type === 'error') {
-      active.delete(m.id);
+      inProgress.delete(m.id);
     }
   });
 })();
 
-// Generic SSE / streaming-JSON parser. Handles the formats used by ChatGPT, Claude, Gemini,
-// DeepSeek, Grok, and Perplexity (with varying coverage — when a format doesn't match any
-// known shape we return '' and the caller falls back to the DOM path).
-//
-// SSE events are blocks separated by blank lines. Each block has zero or more `data:` lines
-// containing payloads. Final marker is often `data: [DONE]`.
-//
-// Format-specific extraction (tried in order, first match wins per event):
-//   - ChatGPT: { message: { content: { parts: ["..."] }, status } } — full message replaces
-//     each event; we keep the latest (longest non-empty parts).
-//   - Claude SSE: { type: "content_block_delta", delta: { type: "text_delta", text: "..." } } —
-//     deltas append.
-//   - OpenAI-compat: { choices: [{ delta: { content: "..." } }] } — deltas append.
-//   - Gemini-style: { candidates: [{ content: { parts: [{ text: "..." }] } }] } — replace.
-//   - Generic: token / completion / text fields.
+// Generic SSE / streaming-JSON parser. See top of file for supported formats. Returns '' when
+// nothing parses cleanly so the caller can fall back to DOM scraping. Defensively rejects
+// JWT-shaped output (ChatGPT's conduit bootstrap response) — those aren't assistant content.
 function wrapperrParseStreamBody(body) {
   if (!body) return '';
 
-  // Some AIs use NDJSON instead of SSE — one JSON object per line, no `data:` prefix.
-  // Try SSE first; if no events parse, fall back to NDJSON.
   let result = '';
   let appendedAnything = false;
   let lastFullMessage = '';
 
   function tryExtract(obj) {
     if (!obj || typeof obj !== 'object') return null;
-    // ChatGPT — full message replace
     if (obj.message?.content?.parts && Array.isArray(obj.message.content.parts)) {
       const joined = obj.message.content.parts.filter((p) => typeof p === 'string').join('');
       if (joined) return { kind: 'replace', text: joined };
     }
-    // Claude SSE: content_block_delta
     if (obj.type === 'content_block_delta' && typeof obj.delta?.text === 'string') {
       return { kind: 'append', text: obj.delta.text };
     }
-    // Claude SSE: completion (older format)
     if (typeof obj.completion === 'string') {
       return { kind: 'replace', text: obj.completion };
     }
-    // OpenAI-compatible streaming
     if (Array.isArray(obj.choices) && obj.choices[0]?.delta?.content) {
       return { kind: 'append', text: obj.choices[0].delta.content };
     }
     if (Array.isArray(obj.choices) && typeof obj.choices[0]?.text === 'string') {
       return { kind: 'append', text: obj.choices[0].text };
     }
-    // Gemini-style candidates
     if (Array.isArray(obj.candidates) && obj.candidates[0]?.content?.parts) {
       const parts = obj.candidates[0].content.parts;
       const text = parts.map((p) => p.text || '').join('');
       if (text) return { kind: 'append', text };
     }
-    // Generic
     if (typeof obj.delta?.text === 'string') return { kind: 'append', text: obj.delta.text };
     if (typeof obj.delta?.content === 'string') return { kind: 'append', text: obj.delta.content };
     if (typeof obj.text === 'string') return { kind: 'append', text: obj.text };
@@ -112,12 +90,11 @@ function wrapperrParseStreamBody(body) {
       result += ext.text;
       appendedAnything = true;
     } else if (ext.kind === 'replace') {
-      // Keep the longest replacement seen (handles ChatGPT's incremental message updates).
       if (ext.text.length > lastFullMessage.length) lastFullMessage = ext.text;
     }
   }
 
-  // SSE pass
+  // SSE pass.
   const blocks = body.split(/\r?\n\r?\n/);
   for (const block of blocks) {
     if (!block.trim()) continue;
@@ -132,14 +109,12 @@ function wrapperrParseStreamBody(body) {
       const obj = JSON.parse(payload);
       applyExtract(tryExtract(obj));
     } catch {
-      // Unparseable payload — skip. Real streaming AI APIs always send JSON in data: fields.
-      // The previous fallback that appended raw text caused conduit JWTs (ChatGPT auth bootstrap)
-      // to bleed through as the "response", since SSE responses with raw JWT bodies parse-fail
-      // here.
+      // Unparseable payload — skip. The previous fallback that appended raw text caused
+      // ChatGPT conduit JWTs to bleed through as the response.
     }
   }
 
-  // NDJSON fallback if SSE didn't yield anything
+  // NDJSON fallback.
   if (!appendedAnything && !lastFullMessage) {
     for (const line of body.split(/\r?\n/)) {
       const trimmed = line.trim();
@@ -151,9 +126,7 @@ function wrapperrParseStreamBody(body) {
     }
   }
 
-  // Defensive: if either result or replaceMode candidate is JWT-shaped, treat as empty. JWTs
-  // (3 base64url segments separated by dots, no whitespace, length > 100) appear in conduit
-  // bootstrap responses and should never be surfaced as assistant content.
+  // Defensive JWT filter.
   function looksLikeJWT(s) {
     if (!s || s.length < 100) return false;
     return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s.trim());
@@ -161,119 +134,39 @@ function wrapperrParseStreamBody(body) {
   if (looksLikeJWT(result)) result = '';
   if (looksLikeJWT(lastFullMessage)) lastFullMessage = '';
 
-  // Replace mode wins if it produced more text than appended deltas.
   if (lastFullMessage.length > result.length) return lastFullMessage;
   return result;
 }
 
-// wrapperrWaitForResponse:
-//   opts.responseSelector — querySelectorAll() target for assistant message containers (DOM path).
-//   opts.getStreaming(last) — function that returns truthy while AI is generating (DOM path).
-//   opts.urlMatch?(url) — optional filter for which streaming responses to consider (network path).
-//   opts.parseNet?(body, url) — optional override for parser; defaults to wrapperrParseStreamBody.
-//   opts.sentAt — timestamp captured BEFORE injectMessage. Network streams that started earlier
-//     are ignored (those belong to prior messages).
-//
-// Resolves with the captured assistant text. Whichever path (network or DOM) produces non-empty
-// text first wins.
-function wrapperrWaitForResponse(opts) {
-  const { responseSelector, getStreaming, urlMatch, parseNet, sentAt } = opts;
-  const cutoff = sentAt || Date.now();
-  const initialCount = document.querySelectorAll(responseSelector).length;
+// wrapperrReadBestStreamText: synchronously returns the longest valid parsed assistant text
+// from streams started at or after `sentAt`. Considers both in-progress and completed streams
+// so growing WS responses are visible mid-stream.
+function wrapperrReadBestStreamText(sentAt) {
+  const cutoff = sentAt - 500; // small grace window in case clocks differ slightly
+  let best = '';
 
-  return new Promise((resolve) => {
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
+  const completed = window.__wrapperrCompleted || [];
+  for (let i = completed.length - 1; i >= 0; i--) {
+    const s = completed[i];
+    if (s.startedAt < cutoff) continue;
+    const text = wrapperrParseStreamBody(s.body);
+    if (text && text.length > best.length) best = text;
+  }
 
-    let lastText = '';
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-    let stableTimer = null;
-    let observer = null;
-    let netHandler = null;
-
-    function finish(text) {
-      if (resolved) return;
-      resolved = true;
-      if (observer) observer.disconnect();
-      if (stableTimer) clearTimeout(stableTimer);
-      if (netHandler) window.__wrapperrNetBus?.removeEventListener('streamComplete', netHandler);
-      resolve(text);
+  const inProgress = window.__wrapperrInProgress;
+  if (inProgress) {
+    for (const s of inProgress.values()) {
+      if (s.startedAt < cutoff) continue;
+      const text = wrapperrParseStreamBody(s.body);
+      if (text && text.length > best.length) best = text;
     }
+  }
 
-    // --- Network path ---
-    netHandler = (event) => {
-      if (resolved) return;
-      const detail = event.detail || {};
-      // Reject streams that started before the user's message was sent.
-      if (detail.startedAt && detail.startedAt < cutoff - 500) return;
-      if (urlMatch && !urlMatch(detail.url)) return;
-      const parser = parseNet || wrapperrParseStreamBody;
-      const text = parser(detail.body, detail.url);
-      if (text && text.trim()) {
-        finish(text);
-      }
-    };
-    window.__wrapperrNetBus?.addEventListener('streamComplete', netHandler);
+  return best;
+}
 
-    // Late subscriber: check the ring buffer of recently-completed streams in case ours
-    // finished between injectMessage and waitForResponse setup.
-    const recent = window.__wrapperrCompletedStreams || [];
-    for (let i = recent.length - 1; i >= 0; i--) {
-      const detail = recent[i];
-      if (detail.startedAt < cutoff - 500) continue;
-      if (urlMatch && !urlMatch(detail.url)) continue;
-      const parser = parseNet || wrapperrParseStreamBody;
-      const text = parser(detail.body, detail.url);
-      if (text && text.trim()) {
-        // Defer to next tick so listeners are torn down cleanly via finish().
-        setTimeout(() => finish(text), 0);
-        return;
-      }
-    }
-
-    // --- DOM path (MutationObserver) ---
-    function evaluate() {
-      if (resolved) return;
-
-      const messages = document.querySelectorAll(responseSelector);
-      if (messages.length <= initialCount) return;
-
-      const last = messages[messages.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
-      const streaming = !!getStreaming(last);
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) lastText = text;
-
-      if (stableTimer) clearTimeout(stableTimer);
-      if (lastText && !streaming) {
-        const win = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-        stableTimer = setTimeout(() => {
-          if (resolved) return;
-          if (!getStreaming(last)) finish(lastText);
-        }, win);
-      }
-    }
-
-    observer = new MutationObserver(evaluate);
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true,
-    });
-    evaluate();
-
-    // Hard safety net.
-    setTimeout(() => {
-      if (!resolved) finish(lastText || 'No response received.');
-    }, HARD_TIMEOUT_MS);
-  });
+function wrapperrBestText(el) {
+  const it = el?.innerText?.trim() ?? '';
+  const tc = el?.textContent?.trim() ?? '';
+  return tc.length > it.length ? tc : it;
 }
