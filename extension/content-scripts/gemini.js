@@ -32,86 +32,24 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Gemini-specific adaptive completion detection. The "streaming" state here
-// combines two signals: a loading indicator visible OR the response-actions toolbar (copy /
-// thumbs / share) NOT yet mounted. Gemini only renders the actions toolbar after generation
-// completes, so its appearance is a strong positive done-signal. When we observe the streaming
-// composite flip true→false during this call, we use the short stability window; otherwise the
-// long fallback. initialCount gate prevents capturing the prior response.
-async function waitForResponse() {
-  const initialCount = document.querySelectorAll(
-    '.model-response-text, [class*="model-response"], .response-container'
-  ).length;
-
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
-    const TICK_MS = 200;
-
-    let lastText = '';
-    let lastChangeAt = Date.now();
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-
-    function tick() {
-      if (resolved) return;
-      const now = Date.now();
-      const elapsed = now - startTime;
-
-      if (elapsed >= HARD_TIMEOUT_MS) {
-        finish(lastText || 'No response received.');
-        return;
-      }
-
-      const responses = document.querySelectorAll(
-        '.model-response-text, [class*="model-response"], .response-container'
-      );
-      if (responses.length <= initialCount) {
-        setTimeout(tick, TICK_MS);
-        return;
-      }
-
-      const last = responses[responses.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
+// waitForResponse delegates to the shared MutationObserver helper. Gemini-specific signals:
+//   - Response container: .model-response-text and friends.
+//   - Streaming = (loading indicator visible) OR (response-actions toolbar not yet rendered).
+//     Gemini only renders the copy/thumbs/share toolbar AFTER generation completes, so its
+//     appearance is a strong positive done-signal. Without this gate, Gemini truncates because
+//     mid-stream pauses look like "stable text" before the response finishes.
+function waitForResponse() {
+  return wrapperrWaitForResponse({
+    responseSelector: '.model-response-text, [class*="model-response"], .response-container',
+    getStreaming: () => {
       const isLoading = !!document.querySelector(
         '[class*="loading-indicator"], .pending-message, [class*="thinking"]'
       );
       const hasActions = !!document.querySelector(
         'message-actions, [data-test-id*="response-actions"], button[aria-label*="Copy"], button[data-test-id*="copy-button"]'
       );
-      const streaming = isLoading || !hasActions;
-
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) {
-        lastText = text;
-        lastChangeAt = now;
-      }
-
-      const stableMs = now - lastChangeAt;
-      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-
-      if (text && !streaming && stableMs >= requiredStable) {
-        finish(text);
-        return;
-      }
-
-      setTimeout(tick, TICK_MS);
-    }
-
-    function finish(text) {
-      resolved = true;
-      resolve(text);
-    }
-
-    setTimeout(tick, TICK_MS);
+      return isLoading || !hasActions;
+    },
   });
 }
 

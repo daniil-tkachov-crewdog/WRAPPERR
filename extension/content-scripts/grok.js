@@ -50,77 +50,16 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Grok adaptive completion detection. Grok exposes the least reliable signals
-// of any AI we drive — selectors are speculative. We try the Stop button as the streaming gate;
-// if we observe the on→off transition, short stability window kicks in. Otherwise we fall back
-// to the longer window. initialCount gate prevents capturing prior responses.
-async function waitForResponse() {
-  const RESPONSE_SELECTOR =
-    '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]';
-  const initialCount = document.querySelectorAll(RESPONSE_SELECTOR).length;
-
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
-    const TICK_MS = 200;
-
-    let lastText = '';
-    let lastChangeAt = Date.now();
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-
-    function tick() {
-      if (resolved) return;
-      const now = Date.now();
-      const elapsed = now - startTime;
-
-      if (elapsed >= HARD_TIMEOUT_MS) {
-        finish(lastText || 'No response received.');
-        return;
-      }
-
-      const messages = document.querySelectorAll(RESPONSE_SELECTOR);
-      if (messages.length <= initialCount) {
-        setTimeout(tick, TICK_MS);
-        return;
-      }
-
-      const last = messages[messages.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
-      const streaming = !!document.querySelector(
-        'button[aria-label*="Stop"], button[aria-label*="stop"]'
-      );
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) {
-        lastText = text;
-        lastChangeAt = now;
-      }
-
-      const stableMs = now - lastChangeAt;
-      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-
-      if (text && !streaming && stableMs >= requiredStable) {
-        finish(text);
-        return;
-      }
-
-      setTimeout(tick, TICK_MS);
-    }
-
-    function finish(text) {
-      resolved = true;
-      resolve(text);
-    }
-
-    setTimeout(tick, TICK_MS);
+// waitForResponse delegates to the shared MutationObserver helper. Grok-specific signals are
+// the least reliable of any AI we drive — selectors here are speculative and may need a DOM
+// dump to nail down. Streaming gate is the Stop button.
+function waitForResponse() {
+  return wrapperrWaitForResponse({
+    responseSelector:
+      '[class*="message"][class*="assistant"], [data-message-author="grok"], [class*="response-content-markdown"], [class*="markdown"]',
+    getStreaming: () => !!document.querySelector(
+      'button[aria-label*="Stop"], button[aria-label*="stop"]'
+    ),
   });
 }
 

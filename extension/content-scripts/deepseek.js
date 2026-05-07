@@ -38,49 +38,16 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: DeepSeek adaptive completion detection. Streaming = Stop button OR a scoped
-// streaming/generating class on the last message itself (broad page-wide [class*="loading"]
-// previously matched sidebar/skeleton loaders and pinned us forever). Short window after on→off
-// transition; long fallback otherwise. initialCount gate prevents capturing prior responses.
-async function waitForResponse() {
-  const RESPONSE_SELECTOR =
-    '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])';
-  const initialCount = document.querySelectorAll(RESPONSE_SELECTOR).length;
-
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
-    const TICK_MS = 200;
-
-    let lastText = '';
-    let lastChangeAt = Date.now();
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-
-    function tick() {
-      if (resolved) return;
-      const now = Date.now();
-      const elapsed = now - startTime;
-
-      if (elapsed >= HARD_TIMEOUT_MS) {
-        finish(lastText || 'No response received.');
-        return;
-      }
-
-      const messages = document.querySelectorAll(RESPONSE_SELECTOR);
-      if (messages.length <= initialCount) {
-        setTimeout(tick, TICK_MS);
-        return;
-      }
-
-      const last = messages[messages.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
+// waitForResponse delegates to the shared MutationObserver helper. DeepSeek-specific signals:
+//   - Response container: ds-markdown / message-content / assistant rows.
+//   - Streaming = Stop button OR scoped streaming/generating class on the last message. The
+//     previous page-wide [class*="loading"] selector matched sidebar/skeleton loaders and
+//     pinned waitForResponse forever.
+function waitForResponse() {
+  return wrapperrWaitForResponse({
+    responseSelector:
+      '[class*="ds-markdown"], [class*="message-content"], [class*="assistant"], [class*="ds-message-row"]:not([class*="user"])',
+    getStreaming: (last) => {
       const stopBtn = document.querySelector(
         'button[aria-label*="Stop"], div[role="button"][aria-label*="Stop"], button[class*="stop"]'
       );
@@ -88,32 +55,8 @@ async function waitForResponse() {
         last.matches('[class*="streaming"], [class*="generating"]') ||
         last.querySelector('[class*="streaming"], [class*="generating"]')
       );
-      const streaming = !!(stopBtn || lastIsStreaming);
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) {
-        lastText = text;
-        lastChangeAt = now;
-      }
-
-      const stableMs = now - lastChangeAt;
-      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-
-      if (text && !streaming && stableMs >= requiredStable) {
-        finish(text);
-        return;
-      }
-
-      setTimeout(tick, TICK_MS);
-    }
-
-    function finish(text) {
-      resolved = true;
-      resolve(text);
-    }
-
-    setTimeout(tick, TICK_MS);
+      return !!(stopBtn || lastIsStreaming);
+    },
   });
 }
 

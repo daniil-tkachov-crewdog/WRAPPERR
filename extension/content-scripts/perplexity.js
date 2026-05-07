@@ -51,75 +51,16 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: Perplexity adaptive completion detection. Streaming gate combines a Stop
-// button and broad spinner classes; on the on→off transition we use the short stability window.
-// initialCount gate prevents capturing prior answers.
-async function waitForResponse() {
-  const RESPONSE_SELECTOR = '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown';
-  const initialCount = document.querySelectorAll(RESPONSE_SELECTOR).length;
-
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
-    const TICK_MS = 200;
-
-    let lastText = '';
-    let lastChangeAt = Date.now();
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-
-    function tick() {
-      if (resolved) return;
-      const now = Date.now();
-      const elapsed = now - startTime;
-
-      if (elapsed >= HARD_TIMEOUT_MS) {
-        finish(lastText || 'No response received.');
-        return;
-      }
-
-      const answers = document.querySelectorAll(RESPONSE_SELECTOR);
-      if (answers.length <= initialCount) {
-        setTimeout(tick, TICK_MS);
-        return;
-      }
-
-      const last = answers[answers.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
-      const streaming = !!document.querySelector(
-        'button[aria-label*="Stop"], [class*="loading"], [aria-label*="loading"], [class*="Spinner"]'
-      );
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) {
-        lastText = text;
-        lastChangeAt = now;
-      }
-
-      const stableMs = now - lastChangeAt;
-      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-
-      if (text && !streaming && stableMs >= requiredStable) {
-        finish(text);
-        return;
-      }
-
-      setTimeout(tick, TICK_MS);
-    }
-
-    function finish(text) {
-      resolved = true;
-      resolve(text);
-    }
-
-    setTimeout(tick, TICK_MS);
+// waitForResponse delegates to the shared MutationObserver helper. Perplexity-specific signals:
+//   - Response container: prose / answer / markdown blocks.
+//   - Streaming gate: Stop button OR broad spinner classes. The broad selectors here can be
+//     noisy; if they match unrelated UI we may need to scope tighter in a follow-up.
+function waitForResponse() {
+  return wrapperrWaitForResponse({
+    responseSelector: '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown',
+    getStreaming: () => !!document.querySelector(
+      'button[aria-label*="Stop"], [class*="loading"], [aria-label*="loading"], [class*="Spinner"]'
+    ),
   });
 }
 

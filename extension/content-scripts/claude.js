@@ -32,75 +32,18 @@ async function injectMessage(message) {
   }
 }
 
-// waitForResponse: adaptive completion detection (200ms polling, short stability after a
-// confirmed streaming on→off transition, longer fallback otherwise). Streaming is detected via
-// the last message's ancestor `[data-is-streaming="true"]` — scoped so unrelated UI doesn't
-// keep us pinned. initialCount gate prevents resolving on the previous assistant message.
-async function waitForResponse() {
-  const initialCount = document.querySelectorAll('.font-claude-message').length;
-
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const HARD_TIMEOUT_MS = 240000;
-    const SHORT_STABLE_MS = 1500;
-    const LONG_STABLE_MS = 6400;
-    const TICK_MS = 200;
-
-    let lastText = '';
-    let lastChangeAt = Date.now();
-    let sawStreamingEnd = false;
-    let prevStreaming = false;
-    let resolved = false;
-
-    function tick() {
-      if (resolved) return;
-      const now = Date.now();
-      const elapsed = now - startTime;
-
-      if (elapsed >= HARD_TIMEOUT_MS) {
-        finish(lastText || 'No response received.');
-        return;
-      }
-
-      const allMessages = document.querySelectorAll('.font-claude-message');
-      if (allMessages.length <= initialCount) {
-        setTimeout(tick, TICK_MS);
-        return;
-      }
-
-      const last = allMessages[allMessages.length - 1];
-      const innerText = last?.innerText?.trim() ?? '';
-      const textContent = last?.textContent?.trim() ?? '';
-      const text = textContent.length > innerText.length ? textContent : innerText;
-
-      const streaming = last
-        ? !!last.closest('[data-is-streaming="true"]')
-        : !!document.querySelector('[data-is-streaming="true"]');
-      if (prevStreaming && !streaming) sawStreamingEnd = true;
-      prevStreaming = streaming;
-
-      if (text !== lastText) {
-        lastText = text;
-        lastChangeAt = now;
-      }
-
-      const stableMs = now - lastChangeAt;
-      const requiredStable = sawStreamingEnd ? SHORT_STABLE_MS : LONG_STABLE_MS;
-
-      if (text && !streaming && stableMs >= requiredStable) {
-        finish(text);
-        return;
-      }
-
-      setTimeout(tick, TICK_MS);
-    }
-
-    function finish(text) {
-      resolved = true;
-      resolve(text);
-    }
-
-    setTimeout(tick, TICK_MS);
+// waitForResponse delegates to the shared MutationObserver helper. Claude-specific signals:
+//   - Response container: .font-claude-message bubbles (assistant only — user messages use a
+//     different class)
+//   - Streaming indicator: the last message's ancestor [data-is-streaming="true"]. We scope it
+//     to the last message's ancestor chain so unrelated UI elsewhere on the page doesn't keep
+//     us pinned forever.
+function waitForResponse() {
+  return wrapperrWaitForResponse({
+    responseSelector: '.font-claude-message',
+    getStreaming: (last) => last
+      ? !!last.closest('[data-is-streaming="true"]')
+      : !!document.querySelector('[data-is-streaming="true"]'),
   });
 }
 

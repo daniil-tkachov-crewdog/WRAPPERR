@@ -112,9 +112,12 @@ function sleep(ms) {
 
 async function injectContentScript(tabId, ai) {
   try {
+    // Inject the shared helper before the AI-specific script so its global
+    // wrapperrWaitForResponse() is defined when the AI script runs. Files are loaded in array
+    // order. Re-injecting on every send is safe — function declarations just get redefined.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: [AI_SCRIPTS[ai]],
+      files: ['content-scripts/_wrapperr-shared.js', AI_SCRIPTS[ai]],
     });
   } catch {
     // Script may already be injected
