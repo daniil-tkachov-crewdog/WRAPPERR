@@ -21,6 +21,7 @@
 
   function looksStreamy(response) {
     const ct = (response.headers.get('content-type') || '').toLowerCase();
+    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)');
     if (!ct) return true;
     return STREAMY_CT.some((t) => ct.includes(t));
   }
@@ -54,6 +55,7 @@
       const reader = forUs.getReader();
       const decoder = new TextDecoder();
       let body = '';
+      let debuggedFirst = false;
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -63,9 +65,14 @@
             break;
           }
           body += decoder.decode(value, { stream: true });
+          if (window.__wrapperrDebug && !debuggedFirst) {
+            debuggedFirst = true;
+            console.log('[wrapperr-net] first chunk url:', url, '\nbody prefix:\n', body.slice(0, 600));
+          }
           post({ type: 'chunk', id, url, startedAt, body });
         }
         post({ type: 'end', id, url, startedAt, body });
+        if (window.__wrapperrDebug) console.log('[wrapperr-net] fetch end', url, 'bytes:', body.length);
       } catch (e) {
         post({ type: 'error', id, url, startedAt, error: String(e) });
       }

@@ -44,9 +44,15 @@
   });
 })();
 
-// Generic SSE / streaming-JSON parser. See top of file for supported formats. Returns '' when
-// nothing parses cleanly so the caller can fall back to DOM scraping. Defensively rejects
-// JWT-shaped output (ChatGPT's conduit bootstrap response) — those aren't assistant content.
+// Generic SSE / streaming-JSON parser. Handles multiple AI streaming formats:
+//   • ChatGPT web: message.content.parts (cumulative replace), JSON-patch delta ("v" key),
+//     Responses API (response.output_text.delta with string delta, response.output_item.done)
+//   • Claude: content_block_delta with delta.text
+//   • OpenAI-compat: choices[0].delta.content
+//   • Gemini: candidates[0].content.parts
+//   • Generic: obj.text, obj.token, obj.completion
+// Returns '' when nothing parses so the caller can fall back to DOM scraping.
+// Defensively rejects JWT-shaped output (ChatGPT bootstrap token bleed-through).
 function wrapperrParseStreamBody(body) {
   if (!body) return '';
 
@@ -56,31 +62,78 @@ function wrapperrParseStreamBody(body) {
 
   function tryExtract(obj) {
     if (!obj || typeof obj !== 'object') return null;
+
+    // ChatGPT web API: each SSE event has the full accumulated text in message.content.parts.
+    // This is a "replace" format — we keep whichever event has the longest text.
     if (obj.message?.content?.parts && Array.isArray(obj.message.content.parts)) {
       const joined = obj.message.content.parts.filter((p) => typeof p === 'string').join('');
       if (joined) return { kind: 'replace', text: joined };
     }
+
+    // ChatGPT JSON-patch delta format: {"v": "delta text", "p": "/message/content/parts/0", "o": "append"}
+    // Also handles plain {"v": "text"} delta events.
+    if (typeof obj.v === 'string' && obj.v) {
+      // Only treat as delta if it looks like a streaming token (not a large replacement object)
+      return { kind: 'append', text: obj.v };
+    }
+    // ChatGPT JSON-patch nested v.message: {"v": {"message": {"content": {"parts": ["..."]}}}}
+    if (obj.v?.message?.content?.parts && Array.isArray(obj.v.message.content.parts)) {
+      const joined = obj.v.message.content.parts.filter((p) => typeof p === 'string').join('');
+      if (joined) return { kind: 'replace', text: joined };
+    }
+
+    // OpenAI Responses API: {"type":"response.output_text.delta","delta":"text fragment"}
+    // delta here is a plain string, not an object.
+    if (typeof obj.delta === 'string' && obj.delta) {
+      return { kind: 'append', text: obj.delta };
+    }
+    // OpenAI Responses API done events: full text available on obj.text
+    if (obj.type === 'response.output_text.done' && typeof obj.text === 'string' && obj.text) {
+      return { kind: 'replace', text: obj.text };
+    }
+    // OpenAI Responses API: response.output_item.done -> output_item.content[0].text
+    if (obj.output_item?.content?.[0]?.type === 'text' && typeof obj.output_item.content[0].text === 'string') {
+      const t = obj.output_item.content[0].text;
+      if (t) return { kind: 'replace', text: t };
+    }
+    // OpenAI Responses API: response.done -> response.output[0].content[0].text
+    if (obj.response?.output?.[0]?.content?.[0]?.type === 'text') {
+      const t = obj.response.output[0].content[0].text;
+      if (typeof t === 'string' && t) return { kind: 'replace', text: t };
+    }
+
+    // Claude (Anthropic API): content_block_delta with delta.text
     if (obj.type === 'content_block_delta' && typeof obj.delta?.text === 'string') {
       return { kind: 'append', text: obj.delta.text };
     }
+
+    // Legacy Claude: obj.completion
     if (typeof obj.completion === 'string') {
       return { kind: 'replace', text: obj.completion };
     }
+
+    // OpenAI-compat chat completions: choices[0].delta.content
     if (Array.isArray(obj.choices) && obj.choices[0]?.delta?.content) {
       return { kind: 'append', text: obj.choices[0].delta.content };
     }
     if (Array.isArray(obj.choices) && typeof obj.choices[0]?.text === 'string') {
       return { kind: 'append', text: obj.choices[0].text };
     }
+
+    // Gemini: candidates[0].content.parts[].text (each SSE event is a delta chunk)
     if (Array.isArray(obj.candidates) && obj.candidates[0]?.content?.parts) {
       const parts = obj.candidates[0].content.parts;
       const text = parts.map((p) => p.text || '').join('');
       if (text) return { kind: 'append', text };
     }
+
+    // Generic delta objects
     if (typeof obj.delta?.text === 'string') return { kind: 'append', text: obj.delta.text };
     if (typeof obj.delta?.content === 'string') return { kind: 'append', text: obj.delta.content };
-    if (typeof obj.text === 'string') return { kind: 'append', text: obj.text };
-    if (typeof obj.token === 'string') return { kind: 'append', text: obj.token };
+
+    // Generic plain text fields — only match if no more specific path matched above
+    if (typeof obj.token === 'string' && obj.token) return { kind: 'append', text: obj.token };
+
     return null;
   }
 
@@ -94,27 +147,37 @@ function wrapperrParseStreamBody(body) {
     }
   }
 
-  // SSE pass.
+  // SSE pass. Standard SSE separates events with blank lines; ChatGPT follows this spec.
+  // We try each data: line individually first (handles single-line-per-event compact format),
+  // then fall back to joining multi-line data: blocks (for multi-line JSON spanning one event).
   const blocks = body.split(/\r?\n\r?\n/);
   for (const block of blocks) {
     if (!block.trim()) continue;
-    const dataLines = [];
+    const unparsedDataLines = [];
     for (const line of block.split(/\r?\n/)) {
-      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trimStart();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const obj = JSON.parse(payload);
+        applyExtract(tryExtract(obj));
+      } catch {
+        // Multi-line JSON value spanning one SSE block — accumulate for joined parse below.
+        unparsedDataLines.push(payload);
+      }
     }
-    if (!dataLines.length) continue;
-    const payload = dataLines.join('\n');
-    if (payload === '[DONE]') continue;
-    try {
-      const obj = JSON.parse(payload);
-      applyExtract(tryExtract(obj));
-    } catch {
-      // Unparseable payload — skip. The previous fallback that appended raw text caused
-      // ChatGPT conduit JWTs to bleed through as the response.
+    if (unparsedDataLines.length > 0) {
+      const joined = unparsedDataLines.join('\n');
+      if (joined && joined !== '[DONE]') {
+        try {
+          const obj = JSON.parse(joined);
+          applyExtract(tryExtract(obj));
+        } catch {}
+      }
     }
   }
 
-  // NDJSON fallback.
+  // NDJSON fallback for non-SSE streaming formats.
   if (!appendedAnything && !lastFullMessage) {
     for (const line of body.split(/\r?\n/)) {
       const trimmed = line.trim();
@@ -126,7 +189,7 @@ function wrapperrParseStreamBody(body) {
     }
   }
 
-  // Defensive JWT filter.
+  // Defensive JWT filter: ChatGPT's conduit bootstrap endpoint returns a bare JWT.
   function looksLikeJWT(s) {
     if (!s || s.length < 100) return false;
     return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s.trim());
@@ -134,8 +197,15 @@ function wrapperrParseStreamBody(body) {
   if (looksLikeJWT(result)) result = '';
   if (looksLikeJWT(lastFullMessage)) lastFullMessage = '';
 
-  if (lastFullMessage.length > result.length) return lastFullMessage;
-  return result;
+  const best = lastFullMessage.length > result.length ? lastFullMessage : result;
+
+  // Debug: set window.__wrapperrDebug = true in DevTools console to log stream parses.
+  if (window.__wrapperrDebug) {
+    console.log('[wrapperr] parseStreamBody result:', best.slice(0, 200),
+      '| appendLen:', result.length, '| replaceLen:', lastFullMessage.length);
+  }
+
+  return best;
 }
 
 // wrapperrReadBestStreamText: synchronously returns the longest valid parsed assistant text
