@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Message, AIModel } from '@/lib/types';
 import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
@@ -27,6 +27,10 @@ export default function ActiveChatState({
   onTimeoutChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  // quote: the snippet of an assistant message the user highlighted via "Ask about it". Held
+  // here (not inside InputBar) so any MessageBubble can set it via its onAskAbout prop. Cleared
+  // after send (via InputBar's onClearQuote) or manually by the chip's X button.
+  const [quote, setQuote] = useState<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -45,7 +49,7 @@ export default function ActiveChatState({
           )}
 
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+            <MessageBubble key={msg.id} message={msg} onAskAbout={setQuote} />
           ))}
 
           {transferring && (
@@ -81,6 +85,8 @@ export default function ActiveChatState({
         onSwitchAI={onSwitchAI}
         onTimeoutChange={onTimeoutChange}
         loading={loading || transferring}
+        quote={quote}
+        onClearQuote={() => setQuote(null)}
       />
     </div>
   );
