@@ -53,8 +53,91 @@
 //   • Generic: obj.text, obj.token, obj.completion
 // Returns '' when nothing parses so the caller can fall back to DOM scraping.
 // Defensively rejects JWT-shaped output (ChatGPT bootstrap token bleed-through).
+// Gemini wrb.fr parser — separate from the SSE path because Gemini's StreamGenerate endpoint
+// uses chunked application/json, not text/event-stream. Each chunk has the form:
+//   <byte-count>[["wrb.fr", null, "<inner-escaped-json>", ...]]
+// The inner JSON contains rc_* arrays holding the full accumulated response text. Each chunk
+// is a superset of the previous, so we take the longest candidate across all chunks.
+// Returns '' if the body doesn't look like Gemini wrb.fr data.
+function wrapperrParseGemini(body) {
+  if (!body || !body.includes('wrb.fr')) return '';
+
+  function findRcText(data) {
+    if (!Array.isArray(data)) return '';
+    // ["rc_XXXXX", ["full text so far", ...], ...]
+    if (typeof data[0] === 'string' && data[0].startsWith('rc_') &&
+        Array.isArray(data[1]) && typeof data[1][0] === 'string' && data[1][0].trim()) {
+      return data[1][0];
+    }
+    let best = '';
+    for (const item of data) {
+      if (Array.isArray(item)) {
+        const t = findRcText(item);
+        if (t.length > best.length) best = t;
+      }
+    }
+    return best;
+  }
+
+  function extractFromArray(arr) {
+    if (!Array.isArray(arr)) return '';
+    for (const item of arr) {
+      if (!Array.isArray(item)) continue;
+      if (item[0] === 'wrb.fr' && typeof item[2] === 'string') {
+        try {
+          const inner = JSON.parse(item[2]);
+          const t = findRcText(inner);
+          if (t) return t;
+        } catch {}
+      }
+      const t = extractFromArray(item);
+      if (t) return t;
+    }
+    return '';
+  }
+
+  // The body is one or more <number>[...] chunks concatenated. Walk through them by tracking
+  // bracket depth — balanced JSON-array extraction without a full tokenizer.
+  let best = '';
+  let i = 0;
+  while (i < body.length) {
+    // Skip whitespace and digits (the byte-count prefix).
+    while (i < body.length && (body[i] === ' ' || body[i] === '\n' || body[i] === '\r')) i++;
+    while (i < body.length && body[i] >= '0' && body[i] <= '9') i++;
+    if (i >= body.length || body[i] !== '[') { i++; continue; }
+
+    // Find the balanced closing bracket for this chunk.
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < body.length; j++) {
+      const c = body[j];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '[' || c === '{') depth++;
+      else if (c === ']' || c === '}') { if (--depth === 0) { end = j; break; } }
+    }
+    if (end < 0) break;
+
+    try {
+      const chunk = JSON.parse(body.slice(i, end + 1));
+      const t = extractFromArray(chunk);
+      if (t.length > best.length) best = t;
+    } catch {}
+    i = end + 1;
+  }
+  return best;
+}
+
 function wrapperrParseStreamBody(body) {
   if (!body) return '';
+
+  // Gemini fast-path: wrb.fr chunked JSON is structurally incompatible with SSE/NDJSON.
+  // Check early and return so we don't waste time on the SSE pass.
+  if (body.includes('wrb.fr')) {
+    const geminiText = wrapperrParseGemini(body);
+    if (geminiText) return geminiText;
+  }
 
   let result = '';
   let appendedAnything = false;
