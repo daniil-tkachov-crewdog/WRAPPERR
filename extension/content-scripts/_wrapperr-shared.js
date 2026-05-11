@@ -152,8 +152,20 @@ function wrapperrParseStreamBody(body) {
     return null;
   }
 
+  // Reject obviously-JWT-shaped chunks at the source so they never accumulate. ChatGPT's
+  // conduit bootstrap can arrive as {"v":"<JWT>"} which would otherwise look like a normal
+  // delta append.
+  function chunkLooksLikeJWT(s) {
+    if (!s || s.length < 80) return false;
+    if (/\s/.test(s)) return false;
+    const core = s.replace(/[.,;:]+$/, '');
+    if (!core.startsWith('eyJ')) return false;
+    return core.split('.').length >= 3;
+  }
+
   function applyExtract(ext) {
     if (!ext) return;
+    if (chunkLooksLikeJWT(ext.text)) return;
     if (ext.kind === 'append') {
       result += ext.text;
       appendedAnything = true;
@@ -204,10 +216,19 @@ function wrapperrParseStreamBody(body) {
     }
   }
 
-  // Defensive JWT filter: ChatGPT's conduit bootstrap endpoint returns a bare JWT.
+  // Defensive JWT filter: ChatGPT's conduit bootstrap endpoint returns a bare JWT that can
+  // bleed through if it arrives wrapped in a {"v":"..."} delta-shaped event. Real prose
+  // contains whitespace; a JWT does not. We strip trailing punctuation (some endpoints
+  // append a separator dot) before checking the eyJ-prefixed base64.dot.base64.dot.base64
+  // shape.
   function looksLikeJWT(s) {
-    if (!s || s.length < 100) return false;
-    return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s.trim());
+    if (!s) return false;
+    const t = s.trim();
+    if (t.length < 80) return false;
+    if (/\s/.test(t)) return false;
+    const core = t.replace(/[.,;:]+$/, '');
+    if (!core.startsWith('eyJ')) return false;
+    return core.split('.').length >= 3;
   }
   if (looksLikeJWT(result)) result = '';
   if (looksLikeJWT(lastFullMessage)) lastFullMessage = '';
