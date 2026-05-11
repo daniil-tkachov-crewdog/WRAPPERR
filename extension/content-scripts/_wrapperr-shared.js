@@ -146,11 +146,12 @@ function wrapperrParseStreamBody(body) {
   function tryExtract(obj) {
     if (!obj || typeof obj !== 'object') return null;
 
-    // ChatGPT web — JSON-patch delta format (the canonical streaming format):
-    //   {"o":"patch","v":[{"p":"/message/content/parts/0","o":"append","v":"text chunk"}, ...]}
-    // Each delta event applies multiple ops. We only care about appends to the assistant text path.
+    // ChatGPT web — JSON-patch delta format. Two shapes:
+    //   Initial event:   {"o":"patch","v":[{"p":"/message/content/parts/0","o":"append","v":"..."}, ...]}
+    //   Follow-up event: {"v":[{"p":"/message/content/parts/0","o":"append","v":"..."}, ...]}
+    // Both are arrays of patch ops; only the wrapper differs. We accept either.
     // Other ops (status changes, metadata) are ignored.
-    if (obj.o === 'patch' && Array.isArray(obj.v)) {
+    if (Array.isArray(obj.v)) {
       let patchText = '';
       for (const op of obj.v) {
         if (
