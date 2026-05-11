@@ -51,7 +51,7 @@ function getBaseline() {
 // of focus); falls back to DOM scraping when the parser yields nothing. Returns '' when neither
 // path has produced a response distinct from the baseline yet.
 function getCurrentState({ sentAt, baselineCount }) {
-  const netText = wrapperrReadBestStreamText(sentAt);
+  const netText = wrapperrReadBestStreamText(sentAt, 'chatgpt');
   if (netText) return netText;
   const messages = document.querySelectorAll(RESPONSE_SELECTOR);
   if (messages.length <= (baselineCount || 0)) return '';

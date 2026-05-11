@@ -41,7 +41,7 @@ function getBaseline() {
 }
 
 function getCurrentState({ sentAt, baselineCount }) {
-  const netText = wrapperrReadBestStreamText(sentAt);
+  const netText = wrapperrReadBestStreamText(sentAt, 'deepseek');
   if (netText) return netText;
   const messages = document.querySelectorAll(RESPONSE_SELECTOR);
   if (messages.length <= (baselineCount || 0)) return '';
