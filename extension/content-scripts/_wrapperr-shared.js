@@ -437,4 +437,8 @@ function wrapperrNormalizeForProvider(text, provider) {
   return out;
 }
 
-function wrapperrBestText
+function wrapperrBestText(el) {
+  const it = el?.innerText?.trim() ?? '';
+  const tc = el?.textContent?.trim() ?? '';
+  return tc.length > it.length ? tc : it;
+}
