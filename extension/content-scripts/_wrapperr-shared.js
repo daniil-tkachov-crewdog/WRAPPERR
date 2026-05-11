@@ -225,8 +225,9 @@ function wrapperrParseStreamBody(body) {
 
 // wrapperrReadBestStreamText: synchronously returns the longest valid parsed assistant text
 // from streams started at or after `sentAt`. Considers both in-progress and completed streams
-// so growing WS responses are visible mid-stream.
-function wrapperrReadBestStreamText(sentAt) {
+// so growing WS responses are visible mid-stream. The optional `provider` arg enables
+// provider-specific post-processing (e.g. converting ChatGPT's PUA link markers to markdown).
+function wrapperrReadBestStreamText(sentAt, provider) {
   const cutoff = sentAt - 500; // small grace window in case clocks differ slightly
   let best = '';
 
@@ -247,7 +248,38 @@ function wrapperrReadBestStreamText(sentAt) {
     }
   }
 
-  return best;
+  return wrapperrNormalizeForProvider(best, provider);
+}
+
+// Provider-aware normalizer. Each AI streams styled content (links, citations, etc.) in its
+// own raw format. This function converts those provider-specific encodings into normalized
+// Markdown so the Wrapperr UI can render every AI's output with one renderer. Add a new
+// per-provider helper here when adding support for a new AI's styled output.
+function wrapperrNormalizeForProvider(text, provider) {
+  if (!text) return text;
+  if (provider === 'chatgpt') return wrapperrNormalizeChatGPT(text);
+  // claude / gemini / grok / perplexity / deepseek currently stream plain Markdown — no
+  // post-processing needed. Add cases here as we discover provider-specific encodings.
+  return text;
+}
+
+// ChatGPT encodes clickable links in content using PUA markers:
+//   <type><label><url>
+// where <type> is usually "url". Convert these to Markdown [label](url). Other types (cite,
+// safe_url, etc.) fall back to just the label. During streaming the closing  may not
+// have arrived yet — we drop any trailing incomplete marker so partially-formed PUA chars
+// never reach the UI; the next poll will see the completed marker and render it properly.
+function wrapperrNormalizeChatGPT(text) {
+  const MARKER_RE = /([a-z_]+)([^]*)([^]*)/g;
+  let out = text.replace(MARKER_RE, (_m, type, label, url) => {
+    if (type === 'url' && url) return `[${label || url}](${url})`;
+    return label || '';
+  });
+  // Trim from the first remaining (incomplete) marker to the end. Avoids showing raw PUA chars
+  // mid-stream; the in-progress marker will complete on the next chunk.
+  const orphan = out.indexOf('');
+  if (orphan !== -1) out = out.slice(0, orphan);
+  return out;
 }
 
 function wrapperrBestText(el) {

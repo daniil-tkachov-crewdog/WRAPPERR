@@ -58,3 +58,68 @@ textarea {
     scrollbar-width: none;
   }
 }
+
+/* Markdown styling for assistant messages. Scoped to .wrapperr-md so it never affects user
+   messages or other UI. Tailwind base resets all margins to 0, so we reintroduce the spacing
+   we want for prose. Keep this minimal — the dark theme handles colors via inherited white. */
+.wrapperr-md > * + * { margin-top: 0.75em; }
+.wrapperr-md h1 { font-size: 1.5em; font-weight: 700; margin-top: 1.25em; }
+.wrapperr-md h2 { font-size: 1.3em; font-weight: 700; margin-top: 1.1em; }
+.wrapperr-md h3 { font-size: 1.15em; font-weight: 600; margin-top: 1em; }
+.wrapperr-md h4, .wrapperr-md h5, .wrapperr-md h6 { font-weight: 600; margin-top: 1em; }
+.wrapperr-md strong { font-weight: 700; }
+.wrapperr-md em { font-style: italic; }
+.wrapperr-md del { text-decoration: line-through; opacity: 0.7; }
+.wrapperr-md ul { list-style: disc; padding-left: 1.5em; }
+.wrapperr-md ol { list-style: decimal; padding-left: 1.5em; }
+.wrapperr-md li > ul, .wrapperr-md li > ol { margin-top: 0.25em; }
+.wrapperr-md li { margin-top: 0.25em; }
+.wrapperr-md li > input[type="checkbox"] { margin-right: 0.4em; }
+.wrapperr-md blockquote {
+  border-left: 3px solid #444;
+  padding-left: 0.9em;
+  color: #bbb;
+  font-style: italic;
+}
+.wrapperr-md code {
+  background: #2a2a2a;
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+.wrapperr-md pre {
+  background: #0e0e0e;
+  border: 1px solid #2a2a2a;
+  padding: 0.85em 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.wrapperr-md pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+.wrapperr-md hr {
+  border: 0;
+  border-top: 1px solid #2a2a2a;
+  margin: 1em 0;
+}
+.wrapperr-md table {
+  border-collapse: collapse;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.wrapperr-md th, .wrapperr-md td {
+  border: 1px solid #2a2a2a;
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.wrapperr-md th { background: #1d1d1d; font-weight: 600; }
+.wrapperr-md p { line-height: 1.55; }
+.wrapperr-md img { max-width: 100%; border-radius: 6px; }
+/* KaTeX overrides — pin sane font color on dark theme. */
+.wrapperr-md .katex { color: inherit; }
