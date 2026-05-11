@@ -233,6 +233,18 @@ function wrapperrParseStreamBody(body) {
   if (looksLikeJWT(result)) result = '';
   if (looksLikeJWT(lastFullMessage)) lastFullMessage = '';
 
+  // Strip a JWT prefix if one is glued to the start of the assistant text. The conduit
+  // bootstrap token sometimes appears as the first bytes of the conversation stream (the
+  // chunk-level filter misses it because the chunk also contains real content after it).
+  function stripLeadingJWT(s) {
+    if (!s || !s.startsWith('eyJ')) return s;
+    const m = s.match(/^(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\.?/);
+    if (m && m[0].length >= 80) return s.slice(m[0].length).replace(/^[\s.]+/, '');
+    return s;
+  }
+  result = stripLeadingJWT(result);
+  lastFullMessage = stripLeadingJWT(lastFullMessage);
+
   const best = lastFullMessage.length > result.length ? lastFullMessage : result;
 
   // Debug: set window.__wrapperrDebug = true in DevTools console to log stream parses.
