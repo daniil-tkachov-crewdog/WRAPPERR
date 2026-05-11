@@ -12,6 +12,12 @@ interface Props {
   onTimeoutChange: (ms: number) => void;
   disabled?: boolean;
   loading?: boolean;
+  // quote: optional text the user highlighted from a prior assistant message via "Ask about it".
+  // When set, we render a chip above the textarea and prepend the text as a Markdown blockquote
+  // to the sent message so the AI sees the quoted context unambiguously. Cleared via onClearQuote
+  // (X button on the chip) or automatically after send.
+  quote?: string | null;
+  onClearQuote?: () => void;
 }
 
 const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
@@ -29,6 +35,8 @@ export default function InputBar({
   onTimeoutChange,
   disabled = false,
   loading = false,
+  quote = null,
+  onClearQuote,
 }: Props) {
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -71,8 +79,16 @@ export default function InputBar({
   function handleSend() {
     const trimmed = text.trim();
     if (!trimmed || disabled || loading) return;
-    onSendMessage(trimmed);
+    // Compose the final outgoing message. If a quote is attached, prepend it as a Markdown
+    // blockquote — each line of the quote gets a leading "> ". Every AI we drive (ChatGPT,
+    // Claude, Grok, Perplexity, Gemini, DeepSeek) understands this convention as "user is
+    // asking about this quoted bit", so we don't need per-AI handling here.
+    const composed = quote
+      ? `${quote.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${trimmed}`
+      : trimmed;
+    onSendMessage(composed);
     setText('');
+    onClearQuote?.();
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -86,6 +102,35 @@ export default function InputBar({
   return (
     <div className="border-t border-border bg-bg px-4 py-4">
       <div className="max-w-3xl mx-auto">
+        {quote && (
+          <div className="mb-2 flex items-start gap-2 bg-surface border border-border rounded-xl px-3 py-2">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-muted shrink-0 mt-0.5"
+            >
+              <polyline points="9 17 4 12 9 7" />
+              <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+            </svg>
+            <p className="flex-1 text-xs text-muted line-clamp-2 leading-relaxed">{quote}</p>
+            <button
+              onClick={onClearQuote}
+              title="Clear reference"
+              className="text-muted hover:text-white transition-colors shrink-0"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
           {/* AI selector */}
           <div className="relative shrink-0" ref={dropdownRef}>
