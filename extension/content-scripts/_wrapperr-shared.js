@@ -63,56 +63,73 @@ function wrapperrParseStreamBody(body) {
   function tryExtract(obj) {
     if (!obj || typeof obj !== 'object') return null;
 
-    // ChatGPT web API: each SSE event has the full accumulated text in message.content.parts.
-    // This is a "replace" format — we keep whichever event has the longest text.
+    // ChatGPT web — JSON-patch delta format (the canonical streaming format):
+    //   {"o":"patch","v":[{"p":"/message/content/parts/0","o":"append","v":"text chunk"}, ...]}
+    // Each delta event applies multiple ops. We only care about appends to the assistant text path.
+    // Other ops (status changes, metadata) are ignored.
+    if (obj.o === 'patch' && Array.isArray(obj.v)) {
+      let patchText = '';
+      for (const op of obj.v) {
+        if (
+          op &&
+          op.p === '/message/content/parts/0' &&
+          op.o === 'append' &&
+          typeof op.v === 'string'
+        ) {
+          patchText += op.v;
+        }
+      }
+      if (patchText) return { kind: 'append', text: patchText };
+      return null; // patch event but no relevant op — skip, don't fall through
+    }
+
+    // ChatGPT web — compact follow-up delta after the patch establishes the path:
+    //   {"v":"more text"}  (path implied to be /message/content/parts/0)
+    // We only treat this as a chunk if `v` is a non-empty string AND no more specific shape matched.
+    // Note: this is checked AFTER the patch handler so {"o":"patch","v":[...]} doesn't fall here.
+    if (typeof obj.v === 'string' && obj.v && !obj.p) {
+      return { kind: 'append', text: obj.v };
+    }
+    // ChatGPT — single-op compact delta: {"p":"/message/content/parts/0","o":"append","v":"text"}
+    if (obj.p === '/message/content/parts/0' && obj.o === 'append' && typeof obj.v === 'string') {
+      return { kind: 'append', text: obj.v };
+    }
+
+    // ChatGPT web — initial assistant message event (full message object, parts may be empty
+    // until deltas patch them in). Used as a "replace" baseline; deltas append on top via the
+    // separate result/append accumulator.
     if (obj.message?.content?.parts && Array.isArray(obj.message.content.parts)) {
       const joined = obj.message.content.parts.filter((p) => typeof p === 'string').join('');
       if (joined) return { kind: 'replace', text: joined };
     }
 
-    // ChatGPT JSON-patch delta format: {"v": "delta text", "p": "/message/content/parts/0", "o": "append"}
-    // Also handles plain {"v": "text"} delta events.
-    if (typeof obj.v === 'string' && obj.v) {
-      // Only treat as delta if it looks like a streaming token (not a large replacement object)
-      return { kind: 'append', text: obj.v };
-    }
-    // ChatGPT JSON-patch nested v.message: {"v": {"message": {"content": {"parts": ["..."]}}}}
-    if (obj.v?.message?.content?.parts && Array.isArray(obj.v.message.content.parts)) {
-      const joined = obj.v.message.content.parts.filter((p) => typeof p === 'string').join('');
-      if (joined) return { kind: 'replace', text: joined };
-    }
-
-    // OpenAI Responses API: {"type":"response.output_text.delta","delta":"text fragment"}
-    // delta here is a plain string, not an object.
+    // OpenAI Responses API — {"type":"response.output_text.delta","delta":"text fragment"}
+    // delta is a plain string here, not an object.
     if (typeof obj.delta === 'string' && obj.delta) {
       return { kind: 'append', text: obj.delta };
     }
-    // OpenAI Responses API done events: full text available on obj.text
+    // OpenAI Responses API — done events with full text on obj.text
     if (obj.type === 'response.output_text.done' && typeof obj.text === 'string' && obj.text) {
       return { kind: 'replace', text: obj.text };
     }
-    // OpenAI Responses API: response.output_item.done -> output_item.content[0].text
     if (obj.output_item?.content?.[0]?.type === 'text' && typeof obj.output_item.content[0].text === 'string') {
       const t = obj.output_item.content[0].text;
       if (t) return { kind: 'replace', text: t };
     }
-    // OpenAI Responses API: response.done -> response.output[0].content[0].text
     if (obj.response?.output?.[0]?.content?.[0]?.type === 'text') {
       const t = obj.response.output[0].content[0].text;
       if (typeof t === 'string' && t) return { kind: 'replace', text: t };
     }
 
-    // Claude (Anthropic API): content_block_delta with delta.text
+    // Claude (Anthropic API)
     if (obj.type === 'content_block_delta' && typeof obj.delta?.text === 'string') {
       return { kind: 'append', text: obj.delta.text };
     }
-
-    // Legacy Claude: obj.completion
     if (typeof obj.completion === 'string') {
       return { kind: 'replace', text: obj.completion };
     }
 
-    // OpenAI-compat chat completions: choices[0].delta.content
+    // OpenAI-compat chat completions
     if (Array.isArray(obj.choices) && obj.choices[0]?.delta?.content) {
       return { kind: 'append', text: obj.choices[0].delta.content };
     }
@@ -120,7 +137,7 @@ function wrapperrParseStreamBody(body) {
       return { kind: 'append', text: obj.choices[0].text };
     }
 
-    // Gemini: candidates[0].content.parts[].text (each SSE event is a delta chunk)
+    // Gemini
     if (Array.isArray(obj.candidates) && obj.candidates[0]?.content?.parts) {
       const parts = obj.candidates[0].content.parts;
       const text = parts.map((p) => p.text || '').join('');
@@ -130,8 +147,6 @@ function wrapperrParseStreamBody(body) {
     // Generic delta objects
     if (typeof obj.delta?.text === 'string') return { kind: 'append', text: obj.delta.text };
     if (typeof obj.delta?.content === 'string') return { kind: 'append', text: obj.delta.content };
-
-    // Generic plain text fields — only match if no more specific path matched above
     if (typeof obj.token === 'string' && obj.token) return { kind: 'append', text: obj.token };
 
     return null;
