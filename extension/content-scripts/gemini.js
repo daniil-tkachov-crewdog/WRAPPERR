@@ -37,9 +37,22 @@ function getBaseline() {
   return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
+// getCurrentState: network-first with a mandatory grace period before DOM fallback.
+// Gemini's DOM renders markdown as HTML; innerText on the rendered DOM produces plain text
+// with no markdown symbols. If we fall back to DOM before the wrb.fr chunks arrive in the
+// network buffer, the SW receives plain text, calls it stable, and returns it — dropping all
+// formatting. We delay DOM fallback by 3 s to give the network buffer time to fill.
+// window.__wrapperrGeminiDomGrace is reset when network text becomes available, so fast
+// responses (where a chunk lands in <3 s) still resolve promptly via network.
 function getCurrentState({ sentAt, baselineCount }) {
   const netText = wrapperrReadBestStreamText(sentAt, 'gemini');
-  if (netText) return netText;
+  if (netText) {
+    window.__wrapperrGeminiDomGrace = null;
+    return netText;
+  }
+  const now = Date.now();
+  if (!window.__wrapperrGeminiDomGrace) window.__wrapperrGeminiDomGrace = now;
+  if (now - window.__wrapperrGeminiDomGrace < 3000) return '';
   const messages = document.querySelectorAll(RESPONSE_SELECTOR);
   if (messages.length <= (baselineCount || 0)) return '';
   return wrapperrBestText(messages[messages.length - 1]);

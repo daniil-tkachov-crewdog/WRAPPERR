@@ -367,39 +367,74 @@ function wrapperrReadBestStreamText(sentAt, provider) {
   return wrapperrNormalizeForProvider(best, provider);
 }
 
-// Provider-aware normalizer. Each AI streams styled content (links, citations, etc.) in its
-// own raw format. This function converts those provider-specific encodings into normalized
-// Markdown so the Wrapperr UI can render every AI's output with one renderer. Add a new
-// per-provider helper here when adding support for a new AI's styled output.
-function wrapperrNormalizeForProvider(text, provider) {
-  if (!text) return text;
-  if (provider === 'chatgpt') return wrapperrNormalizeChatGPT(text);
-  // claude / gemini / grok / perplexity / deepseek currently stream plain Markdown — no
-  // post-processing needed. Add cases here as we discover provider-specific encodings.
-  return text;
-}
+// =============================================================================
+// NORMALIZER PIPELINE
+// Raw provider stream → wrapperrNormalizeForProvider → standard Markdown → ReactMarkdown
+//
+// One function per style element. Each converts ALL providers' encodings of that element
+// into standard Markdown. To add support for a new AI's custom encoding, add a branch
+// inside the relevant style function — never scatter the logic elsewhere.
+//
+// Current non-standard encodings:
+//   chatgpt  links: PUA markers U+E200 type U+E202 label U+E202 url U+E201
+//   all others: already emit standard GFM Markdown — functions are pass-throughs
+//   (add new branches here as more AIs are analysed)
+// =============================================================================
 
-// ChatGPT encodes clickable links in content using PUA markers:
-//   <type><label><url>
-// where <type> is usually "url". Convert these to Markdown [label](url). Other types (cite,
-// safe_url, etc.) fall back to just the label. During streaming the closing  may not
-// have arrived yet — we drop any trailing incomplete marker so partially-formed PUA chars
-// never reach the UI; the next poll will see the completed marker and render it properly.
-function wrapperrNormalizeChatGPT(text) {
+// normalizeLinks: clickable links → [label](url)
+// ChatGPT uses Private-Use-Area markers instead of Markdown links. All other providers
+// already use standard Markdown syntax.
+function normalizeLinks(text, provider) {
+  if (provider !== 'chatgpt') return text;
+  // PUA encoding: U+E200 <type> U+E202 <label> U+E202 <url> U+E201
+  const SEP = '', OPEN = '', CLOSE = '';
   const MARKER_RE = /([a-z_]+)([^]*)([^]*)/g;
   let out = text.replace(MARKER_RE, (_m, type, label, url) => {
     if (type === 'url' && url) return `[${label || url}](${url})`;
     return label || '';
   });
-  // Trim from the first remaining (incomplete) marker to the end. Avoids showing raw PUA chars
-  // mid-stream; the in-progress marker will complete on the next chunk.
+  void SEP; void OPEN; void CLOSE; // referenced in MARKER_RE via template; keep lint happy
   const orphan = out.indexOf('');
   if (orphan !== -1) out = out.slice(0, orphan);
   return out;
 }
 
-function wrapperrBestText(el) {
-  const it = el?.innerText?.trim() ?? '';
-  const tc = el?.textContent?.trim() ?? '';
-  return tc.length > it.length ? tc : it;
+// normalizeHeadings: # / ## / ### → ATX headings (standard for all providers)
+function normalizeHeadings(text, _provider) { return text; }
+
+// normalizeBoldItalic: **bold**, *italic*, ***both***, ~~strike~~ (standard for all)
+function normalizeBoldItalic(text, _provider) { return text; }
+
+// normalizeCode: `inline` and ``` fenced code blocks (standard for all providers)
+function normalizeCode(text, _provider) { return text; }
+
+// normalizeLists: bullet / numbered / nested / task checkboxes (standard GFM for all)
+function normalizeLists(text, _provider) { return text; }
+
+// normalizeBlockquotes: > prefix and warning/note callouts (standard for all providers)
+function normalizeBlockquotes(text, _provider) { return text; }
+
+// normalizeTables: GFM pipe tables (standard for all providers)
+function normalizeTables(text, _provider) { return text; }
+
+// normalizeLatex: $...$ inline and $$...$$ display math for KaTeX (standard for all)
+function normalizeLatex(text, _provider) { return text; }
+
+// wrapperrNormalizeForProvider: entry point that chains all per-style normalizers.
+// Each step is responsible for exactly one style element. Output is always standard
+// Markdown/GFM + KaTeX, fed directly to ReactMarkdown in the Wrapperr UI.
+function wrapperrNormalizeForProvider(text, provider) {
+  if (!text) return text;
+  let out = text;
+  out = normalizeLinks(out, provider);
+  out = normalizeHeadings(out, provider);
+  out = normalizeBoldItalic(out, provider);
+  out = normalizeCode(out, provider);
+  out = normalizeLists(out, provider);
+  out = normalizeBlockquotes(out, provider);
+  out = normalizeTables(out, provider);
+  out = normalizeLatex(out, provider);
+  return out;
 }
+
+function wrapperrBestText
