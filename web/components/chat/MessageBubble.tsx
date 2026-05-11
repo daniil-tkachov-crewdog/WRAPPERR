@@ -34,46 +34,32 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
     useState<{ text: string; top: number; left: number } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Show: fires when the user releases the mouse inside this bubble after a drag-select. We
+  // know the selection is within the bubble because mouseup happened here, so we skip the
+  // fragile commonAncestorContainer.contains() check that ReactMarkdown's nested DOM was
+  // tripping up. Hide: selectionchange clears the chip when the user clicks elsewhere and
+  // the selection collapses. We do NOT hide on scroll — the user may scroll to give the
+  // button room or just to inspect; the button gets repositioned via getBoundingClientRect
+  // each mouseup, and once they actually click outside the selection collapses anyway.
+  function showFromCurrentSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const text = sel.toString().trim();
+    if (!text) return;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    // Default above the selection; flip below if there isn't room near the viewport top.
+    const top = rect.top > 50 ? rect.top - 38 : rect.bottom + 8;
+    setSelectionInfo({ text, top, left: rect.left + rect.width / 2 });
+  }
+
   useEffect(() => {
     if (isUser || !onAskAbout) return;
-
     function handleSelectionChange() {
       const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) {
-        setSelectionInfo(null);
-        return;
-      }
-      const text = sel.toString().trim();
-      if (!text) {
-        setSelectionInfo(null);
-        return;
-      }
-      const range = sel.getRangeAt(0);
-      const node = range.commonAncestorContainer;
-      const checkNode = node.nodeType === 1 ? (node as Element) : node.parentElement;
-      if (!bubbleRef.current || !checkNode || !bubbleRef.current.contains(checkNode)) {
-        setSelectionInfo(null);
-        return;
-      }
-      const rect = range.getBoundingClientRect();
-      setSelectionInfo({
-        text,
-        top: rect.top - 38,
-        left: rect.left + rect.width / 2,
-      });
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) setSelectionInfo(null);
     }
-
-    function clearOnScroll() {
-      setSelectionInfo(null);
-    }
-
     document.addEventListener('selectionchange', handleSelectionChange);
-    // capture:true so we catch scrolls inside the chat container, not just window scroll.
-    window.addEventListener('scroll', clearOnScroll, true);
-    return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange);
-      window.removeEventListener('scroll', clearOnScroll, true);
-    };
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
   }, [isUser, onAskAbout]);
 
   function handleCopy() {
@@ -95,6 +81,7 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
       <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[75%]`}>
         <div
           ref={bubbleRef}
+          onMouseUp={!isUser && onAskAbout ? showFromCurrentSelection : undefined}
           className={`${
             isUser
               ? 'bg-white text-black rounded-2xl rounded-tr-sm px-4 py-3'
