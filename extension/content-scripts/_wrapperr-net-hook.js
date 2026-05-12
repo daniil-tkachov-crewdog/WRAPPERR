@@ -1,7 +1,7 @@
-// MAIN-world fetch + WebSocket hook. Runs at document_start before any AI site script
-// executes. Tees streaming responses (fetch) and mirrors WebSocket frames so the body buffer
-// grows in real time even when the tab is throttled, while the page's own consumer still
-// receives unchanged data (its UI works as normal when focused).
+// MAIN-world fetch + XHR + WebSocket hook. Runs at document_start before any AI site script
+// executes. Tees streaming responses (fetch + XHR responseText) and mirrors WebSocket frames
+// so the body buffer grows in real time even when the tab is throttled, while the page's own
+// consumer still receives unchanged data (its UI works as normal when focused).
 //
 // Architecture: keep the body buffer in MAIN world (so we don't repeatedly serialize big
 // payloads to the isolated world), and emit lightweight `chunk` / `end` postMessage updates
@@ -90,6 +90,79 @@
       headers: response.headers,
     });
   };
+
+  // -------- XHR hook --------
+  // Some AI tabs (Gemini in particular) deliver chat responses via XMLHttpRequest, not fetch().
+  // We patch open() to record method/url, then patch send() to attach a readystatechange listener.
+  // While readyState === 3 (LOADING), responseText keeps growing — we post `chunk` updates with
+  // the cumulative body so the SW-side parser sees it grow in real time. On readyState === 4
+  // (DONE) we post `end`. Same content-type filter as fetch (stream-ish + any application/json).
+  const XHRProto = window.XMLHttpRequest && window.XMLHttpRequest.prototype;
+  if (XHRProto && !window.__wrapperrXHRHooked) {
+    window.__wrapperrXHRHooked = true;
+    const origOpen = XHRProto.open;
+    const origSend = XHRProto.send;
+
+    XHRProto.open = function wrapperrPatchedXHROpen(method, url) {
+      try {
+        this.__wrapperr = { method: String(method || 'GET').toUpperCase(), url: String(url || '') };
+      } catch {}
+      return origOpen.apply(this, arguments);
+    };
+
+    XHRProto.send = function wrapperrPatchedXHRSend() {
+      const meta = this.__wrapperr;
+      // Only POSTs are interesting — chat sends are always POST.
+      if (!meta || meta.method !== 'POST') return origSend.apply(this, arguments);
+
+      const id = ++counter;
+      const startedAt = Date.now();
+      const url = meta.url;
+      let started = false;
+      let lastLen = 0;
+      let ctChecked = false;
+      let ctOk = false;
+
+      const onReady = () => {
+        try {
+          // readyState 2 = HEADERS_RECEIVED; first chance to inspect content-type.
+          if (!ctChecked && this.readyState >= 2) {
+            ctChecked = true;
+            const ct = (this.getResponseHeader && (this.getResponseHeader('content-type') || '')).toLowerCase();
+            if (window.__wrapperrDebug) console.log('[wrapperr-net] XHR POST response ct:', ct || '(empty)', 'url:', url);
+            // Mirror looksStreamy(): allow empty CT, event-stream/ndjson/jsonl, and any JSON.
+            if (!ct) ctOk = true;
+            else if (STREAMY_CT.some((t) => ct.includes(t))) ctOk = true;
+            else if (ct.includes('application/json')) ctOk = true;
+            else if (ct.includes('text/plain')) ctOk = true; // Gemini sometimes labels wrb.fr as text/plain.
+            if (!ctOk) return;
+            started = true;
+            post({ type: 'start', id, url, startedAt });
+          }
+          if (!ctOk) return;
+          // responseText is only safe to read for text-ish responseTypes (default '' or 'text').
+          if (this.responseType && this.responseType !== '' && this.responseType !== 'text') return;
+          const txt = this.responseText || '';
+          if (txt.length > lastLen) {
+            lastLen = txt.length;
+            if (window.__wrapperrDebug && txt.length > 0 && lastLen <= 600) {
+              console.log('[wrapperr-net] XHR first chunk url:', url, '\nbody prefix:\n', txt.slice(0, 600));
+            }
+            post({ type: 'chunk', id, url, startedAt, body: txt });
+          }
+          if (this.readyState === 4) {
+            if (started) {
+              post({ type: 'end', id, url, startedAt, body: this.responseText || '' });
+              if (window.__wrapperrDebug) console.log('[wrapperr-net] XHR end', url, 'bytes:', (this.responseText || '').length);
+            }
+          }
+        } catch {}
+      };
+
+      try { this.addEventListener('readystatechange', onReady); } catch {}
+      return origSend.apply(this, arguments);
+    };
+  }
 
   // -------- WebSocket hook --------
   // ChatGPT and similar AIs deliver actual chat content over WS after a conduit-JWT POST.
