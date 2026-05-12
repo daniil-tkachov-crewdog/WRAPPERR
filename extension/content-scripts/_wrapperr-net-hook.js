@@ -36,9 +36,21 @@
     return JSON_CHAT_URL_PATTERNS.some((rx) => rx.test(url));
   }
 
+  // ChatGPT host lockdown: on chatgpt.com, ONLY the actual chat-reply SSE endpoint is teed.
+  // Every other URL (sentinel/* bootstrap, ces/* telemetry, conversation/prepare, etc.) is
+  // skipped no matter what content-type it returns. This is the only way to make sure a
+  // bootstrap token (JWT or Fernet) can never reach the parser buffer.
+  const CHATGPT_CHAT_URL = /chatgpt\.com\/backend-api\/(f\/)?conversation(\/|$|\?)/i;
+  function urlIsBlockedOnChatGPT(url) {
+    if (!/^https?:\/\/(?:[^/]*\.)?chatgpt\.com\//i.test(url)) return false;
+    return !CHATGPT_CHAT_URL.test(url);
+  }
+
   function looksStreamy(response, url) {
     const ct = (response.headers.get('content-type') || '').toLowerCase();
     if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url);
+    // ChatGPT: hard URL lockdown — only chat-reply URL passes, regardless of content-type.
+    if (urlIsBlockedOnChatGPT(url)) return false;
     if (!ct) return true;
     if (STREAMY_CT.some((t) => ct.includes(t))) return true;
     // application/json is only teed for explicitly known chat-stream URLs. Anything else
