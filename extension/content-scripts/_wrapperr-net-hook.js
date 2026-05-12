@@ -19,44 +19,16 @@
   const STREAMY_CT = ['text/event-stream', 'application/x-ndjson', 'application/jsonl'];
   let counter = 0;
 
-  // Per-AI URL allowlist for application/json responses. Required because some AIs (Gemini)
-  // stream their chat reply as application/json, but every site also makes many unrelated JSON
-  // POSTs (auth, analytics, bootstrap tokens). Teeing all JSON was what caused ChatGPT's
-  // Fernet bootstrap token to bleed into the assistant reply. Only URLs matching this list
-  // get teed when the content-type is application/json.
-  //
-  // Step 1 (temporary): hardcoded list. Step 3 will replace this with a registration API the
-  // per-AI scripts call into so the net hook stays generic.
-  const JSON_CHAT_URL_PATTERNS = [
-    /gemini\.google\.com\/.*StreamGenerate/i,
-    /assistant\.google\.com\/.*StreamGenerate/i,
-  ];
-
-  function urlIsKnownJsonChat(url) {
-    return JSON_CHAT_URL_PATTERNS.some((rx) => rx.test(url));
-  }
-
-  // ChatGPT host lockdown: on chatgpt.com, ONLY the actual chat-reply SSE endpoint is teed.
-  // Every other URL (sentinel/* bootstrap, ces/* telemetry, conversation/prepare, etc.) is
-  // skipped no matter what content-type it returns. This is the only way to make sure a
-  // bootstrap token (JWT or Fernet) can never reach the parser buffer.
-  const CHATGPT_CHAT_URL = /chatgpt\.com\/backend-api\/(f\/)?conversation(\/|$|\?)/i;
-  function urlIsBlockedOnChatGPT(url) {
-    if (!/^https?:\/\/(?:[^/]*\.)?chatgpt\.com\//i.test(url)) return false;
-    return !CHATGPT_CHAT_URL.test(url);
-  }
-
-  function looksStreamy(response, url) {
+  function looksStreamy(response) {
     const ct = (response.headers.get('content-type') || '').toLowerCase();
-    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url);
-    // ChatGPT: hard URL lockdown — only chat-reply URL passes, regardless of content-type.
-    if (urlIsBlockedOnChatGPT(url)) return false;
+    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)');
     if (!ct) return true;
     if (STREAMY_CT.some((t) => ct.includes(t))) return true;
-    // application/json is only teed for explicitly known chat-stream URLs. Anything else
-    // (auth bootstrap, analytics, settings) passes through untouched so it can't pollute the
-    // parser buffer.
-    if (ct.includes('application/json')) return urlIsKnownJsonChat(url);
+    // Gemini streams over application/json with no event-stream content-type. Tee ALL JSON
+    // POST responses on the page — the parser (wrb.fr detector) will ignore anything that
+    // isn't actually a streaming response, so the cost is just a bit of extra buffering for
+    // small JSON API calls.
+    if (ct.includes('application/json')) return true;
     return false;
   }
 
@@ -75,7 +47,7 @@
 
     let response;
     try { response = await origFetch(input, init); } catch (e) { throw e; }
-    if (!response.body || !looksStreamy(response, url)) return response;
+    if (!response.body || !looksStreamy(response)) return response;
 
     const id = ++counter;
     const startedAt = Date.now();
