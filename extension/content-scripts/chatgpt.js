@@ -37,96 +37,9 @@ async function injectMessage(message) {
 // don't return prior responses) and for DOM-scrape fallback when network capture yields nothing.
 const RESPONSE_SELECTOR = '[data-message-author-role="assistant"]';
 
-// parseChatGPTStream: strict ChatGPT-only parser. Accepts ONLY events that target the assistant
-// message content path (/message/content/parts/0). Everything else in the SSE stream
-// (resume_conversation_token, conduit JWTs, Fernet bootstrap tokens, telemetry events) is
-// ignored by construction. This is intentionally stricter than the generic
-// wrapperrParseStreamBody so changes to other AIs' parsing can never leak into ChatGPT, and
-// so unrelated SSE events can never bleed token strings into the assistant text.
-function parseChatGPTStream(body) {
-  if (!body) return '';
-  let text = '';
-  let baseline = '';
-  let pathSeen = false;
-
-  // Apply one parsed SSE event payload object.
-  function apply(obj) {
-    if (!obj || typeof obj !== 'object') return;
-
-    // Initial assistant message envelope — provides a content baseline before any patches.
-    if (obj.message?.content?.parts && Array.isArray(obj.message.content.parts)) {
-      const joined = obj.message.content.parts.filter((p) => typeof p === 'string').join('');
-      if (joined.length > baseline.length) baseline = joined;
-      return;
-    }
-
-    // Patch envelope: {"o":"patch","v":[...ops...]} or follow-up {"v":[...ops...]}.
-    if (Array.isArray(obj.v)) {
-      for (const op of obj.v) {
-        if (!op || op.p !== '/message/content/parts/0' || typeof op.v !== 'string') continue;
-        if (op.o === 'append') { text += op.v; pathSeen = true; }
-        else if (op.o === 'replace') { text = op.v; pathSeen = true; }
-      }
-      return;
-    }
-
-    // Single inline op: {"p":"/message/content/parts/0","o":"append"|"replace","v":"..."}
-    if (obj.p === '/message/content/parts/0' && typeof obj.v === 'string') {
-      if (obj.o === 'append') { text += obj.v; pathSeen = true; }
-      else if (obj.o === 'replace') { text = obj.v; pathSeen = true; }
-      return;
-    }
-
-    // Compact follow-up delta {"v":"..."} — only accepted AFTER the path has been established
-    // by an explicit patch in this stream. This prevents any unrelated string field (bootstrap
-    // tokens, etc.) from being slurped as content.
-    if (typeof obj.v === 'string' && obj.v && !obj.p && pathSeen) {
-      text += obj.v;
-      return;
-    }
-  }
-
-  // Standard SSE block walk.
-  const blocks = body.split(/\r?\n\r?\n/);
-  for (const block of blocks) {
-    if (!block.trim()) continue;
-    for (const line of block.split(/\r?\n/)) {
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trimStart();
-      if (!payload || payload === '[DONE]') continue;
-      try { apply(JSON.parse(payload)); } catch {}
-    }
-  }
-
-  return text || baseline;
-}
-
-// readBestChatGPTText: walk the in-progress + completed network buffers (filled by the MAIN-world
-// fetch hook), parse each with parseChatGPTStream, and return the longest result whose stream
-// started at/after sentAt. Mirrors wrapperrReadBestStreamText but uses the strict parser.
-function readBestChatGPTText(sentAt) {
-  const cutoff = sentAt - 500;
-  let best = '';
-
-  const completed = window.__wrapperrCompleted || [];
-  for (let i = completed.length - 1; i >= 0; i--) {
-    const s = completed[i];
-    if (s.startedAt < cutoff) continue;
-    const t = parseChatGPTStream(s.body);
-    if (t && t.length > best.length) best = t;
-  }
-  const inProgress = window.__wrapperrInProgress;
-  if (inProgress) {
-    for (const s of inProgress.values()) {
-      if (s.startedAt < cutoff) continue;
-      const t = parseChatGPTStream(s.body);
-      if (t && t.length > best.length) best = t;
-    }
-  }
-
-  // Style normalisation (PUA link markers etc.) is still owned by the shared normaliser.
-  return wrapperrNormalizeForProvider(best, 'chatgpt');
-}
+// Stream parser + buffer reader live in providers/chatgpt-parser.js. They are injected before
+// this script by the service worker (see AI_SCRIPTS in background/service-worker.js) and expose
+// the global readBestChatGPTText() used below.
 
 // getBaseline: snapshot the assistant-message count + last text BEFORE injection, so the SW can
 // distinguish the new response from any prior one.

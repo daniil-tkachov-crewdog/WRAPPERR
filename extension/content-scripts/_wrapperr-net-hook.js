@@ -16,20 +16,65 @@
   if (window.__wrapperrFetchHooked) return;
   window.__wrapperrFetchHooked = true;
 
+  // -------- per-AI capture rule registry --------
+  // Each per-AI MAIN-world rule file (e.g. providers/chatgpt-capture-rule.js) pushes one rule
+  // here at document_start. A rule has the shape:
+  //   { provider, hostPattern, urlPattern, contentTypes? }
+  // hostPattern: identifies whether this host has any registered rules (migrated to the registry).
+  // urlPattern:  the explicit URL allowlist for capture on this host.
+  // contentTypes (optional): if present, response Content-Type must include one of these strings.
+  // The hook reads __wrapperrCaptureRules on every request, so rules registered after the hook
+  // installs still take effect on the next fetch.
+  window.__wrapperrCaptureRules ||= [];
+
+  // Legacy content-type sniffer. Used ONLY for hosts that have NOT registered any rule yet.
+  // Once a host is migrated (any rule for its hostPattern is present), the hook switches to
+  // default-deny for that host: only explicit allowlist matches are teed. This is what stops
+  // bootstrap/telemetry/auth responses from polluting the parser buffer on migrated AIs without
+  // affecting AIs that are still on the shared pipeline.
   const STREAMY_CT = ['text/event-stream', 'application/x-ndjson', 'application/jsonl'];
-  // URLs that stream chunked JSON but report application/json content-type. Without this,
-  // Gemini's StreamGenerate endpoint would be skipped by looksStreamy and never teed.
   const STREAMY_URL_PATTERNS = ['StreamGenerate', 'streamGenerateContent'];
   let counter = 0;
 
-  function looksStreamy(response, url) {
-    const ct = (response.headers.get('content-type') || '').toLowerCase();
-    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url);
+  function legacyLooksStreamy(ct, url) {
     if (!ct) return true;
     if (STREAMY_CT.some((t) => ct.includes(t))) return true;
-    // Gemini and similar services stream over application/json with a URL marker.
     if (ct.includes('application/json') && STREAMY_URL_PATTERNS.some((p) => url.includes(p))) return true;
     return false;
+  }
+
+  // findMatchingRule: explicit allow — URL matches an allowlist entry AND (when the rule pins
+  // content types) the response content-type matches one of the pinned values.
+  function findMatchingRule(url, ct) {
+    const rules = window.__wrapperrCaptureRules || [];
+    for (const rule of rules) {
+      if (!rule?.urlPattern?.test?.(url)) continue;
+      if (rule.contentTypes && !rule.contentTypes.some((t) => ct.includes(t))) continue;
+      return rule;
+    }
+    return null;
+  }
+
+  // hostIsMigrated: any rule whose hostPattern matches this URL means the host is in
+  // default-deny mode (only allowlisted URLs are teed). Used to gate the legacy fallback.
+  function hostIsMigrated(url) {
+    const rules = window.__wrapperrCaptureRules || [];
+    for (const rule of rules) {
+      if (rule?.hostPattern?.test?.(url)) return true;
+    }
+    return false;
+  }
+
+  function shouldTee(response, url) {
+    const ct = (response.headers.get('content-type') || '').toLowerCase();
+    const matched = findMatchingRule(url, ct);
+    if (window.__wrapperrDebug) {
+      const verdict = matched ? `allow (rule: ${matched.provider})` : (hostIsMigrated(url) ? 'deny (migrated host)' : 'legacy');
+      console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url, '|', verdict);
+    }
+    if (matched) return true;
+    if (hostIsMigrated(url)) return false;
+    return legacyLooksStreamy(ct, url);
   }
 
   function post(payload) {
@@ -47,7 +92,7 @@
 
     let response;
     try { response = await origFetch(input, init); } catch (e) { throw e; }
-    if (!response.body || !looksStreamy(response, url)) return response;
+    if (!response.body || !shouldTee(response, url)) return response;
 
     const id = ++counter;
     const startedAt = Date.now();

@@ -7,13 +7,16 @@ const AI_URLS = {
   deepseek:   'https://chat.deepseek.com',
 };
 
+// AI_SCRIPTS values are arrays so an AI can declare additional helper files (parser, capture
+// rule, etc.) that must be injected before its main content script. Files are injected in the
+// order listed; later files can rely on globals defined by earlier ones.
 const AI_SCRIPTS = {
-  chatgpt:    'content-scripts/chatgpt.js',
-  claude:     'content-scripts/claude.js',
-  grok:       'content-scripts/grok.js',
-  perplexity: 'content-scripts/perplexity.js',
-  gemini:     'content-scripts/gemini.js',
-  deepseek:   'content-scripts/deepseek.js',
+  chatgpt:    ['content-scripts/providers/chatgpt-parser.js', 'content-scripts/chatgpt.js'],
+  claude:     ['content-scripts/claude.js'],
+  grok:       ['content-scripts/grok.js'],
+  perplexity: ['content-scripts/perplexity.js'],
+  gemini:     ['content-scripts/gemini.js'],
+  deepseek:   ['content-scripts/deepseek.js'],
 };
 
 // tabMap: { [ai]: tabId }
@@ -117,7 +120,7 @@ async function injectContentScript(tabId, ai) {
     // order. Re-injecting on every send is safe — function declarations just get redefined.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['content-scripts/_wrapperr-shared.js', AI_SCRIPTS[ai]],
+      files: ['content-scripts/_wrapperr-shared.js', ...AI_SCRIPTS[ai]],
     });
   } catch {
     // Script may already be injected

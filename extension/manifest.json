@@ -43,6 +43,12 @@
       "js": ["content-scripts/_wrapperr-net-hook.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content-scripts/providers/chatgpt-capture-rule.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {
