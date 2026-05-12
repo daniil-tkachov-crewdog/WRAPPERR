@@ -17,18 +17,18 @@
   window.__wrapperrFetchHooked = true;
 
   const STREAMY_CT = ['text/event-stream', 'application/x-ndjson', 'application/jsonl'];
+  // URLs that stream chunked JSON but report application/json content-type. Without this,
+  // Gemini's StreamGenerate endpoint would be skipped by looksStreamy and never teed.
+  const STREAMY_URL_PATTERNS = ['StreamGenerate', 'streamGenerateContent'];
   let counter = 0;
 
-  function looksStreamy(response) {
+  function looksStreamy(response, url) {
     const ct = (response.headers.get('content-type') || '').toLowerCase();
-    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)');
+    if (window.__wrapperrDebug) console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url);
     if (!ct) return true;
     if (STREAMY_CT.some((t) => ct.includes(t))) return true;
-    // Gemini streams over application/json with no event-stream content-type. Tee ALL JSON
-    // POST responses on the page — the parser (wrb.fr detector) will ignore anything that
-    // isn't actually a streaming response, so the cost is just a bit of extra buffering for
-    // small JSON API calls.
-    if (ct.includes('application/json')) return true;
+    // Gemini and similar services stream over application/json with a URL marker.
+    if (ct.includes('application/json') && STREAMY_URL_PATTERNS.some((p) => url.includes(p))) return true;
     return false;
   }
 
@@ -47,7 +47,7 @@
 
     let response;
     try { response = await origFetch(input, init); } catch (e) { throw e; }
-    if (!response.body || !looksStreamy(response)) return response;
+    if (!response.body || !looksStreamy(response, url)) return response;
 
     const id = ++counter;
     const startedAt = Date.now();
