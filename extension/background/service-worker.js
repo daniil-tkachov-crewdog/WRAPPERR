@@ -15,7 +15,7 @@ const AI_SCRIPTS = {
   claude:     ['content-scripts/claude.js'],
   grok:       ['content-scripts/grok.js'],
   perplexity: ['content-scripts/perplexity.js'],
-  gemini:     ['content-scripts/gemini.js'],
+  gemini:     ['content-scripts/providers/gemini-parser.js', 'content-scripts/gemini.js'],
   deepseek:   ['content-scripts/deepseek.js'],
 };
 

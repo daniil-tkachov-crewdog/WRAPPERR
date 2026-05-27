@@ -37,6 +37,10 @@ function getBaseline() {
   return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
+// Stream parser + buffer reader live in providers/gemini-parser.js. They are injected before
+// this script by the service worker (see AI_SCRIPTS in background/service-worker.js) and expose
+// the global readBestGeminiText() used below.
+
 // getCurrentState: network-first with a mandatory grace period before DOM fallback.
 // Gemini's DOM renders markdown as HTML; innerText on the rendered DOM produces plain text
 // with no markdown symbols. If we fall back to DOM before the wrb.fr chunks arrive in the
@@ -45,7 +49,7 @@ function getBaseline() {
 // window.__wrapperrGeminiDomGrace is reset when network text becomes available, so fast
 // responses (where a chunk lands in <3 s) still resolve promptly via network.
 function getCurrentState({ sentAt, baselineCount }) {
-  const netText = wrapperrReadBestStreamText(sentAt, 'gemini');
+  const netText = readBestGeminiText(sentAt);
   if (netText) {
     window.__wrapperrGeminiDomGrace = null;
     return netText;
