@@ -1,4 +1,12 @@
 // injectMessage: locate Gemini's rich-textarea / .ql-editor composer and submit.
+//
+// Gemini's composer is a Quill rich-text editor on a contenteditable. execCommand('insertText')
+// drops every line after the first when the message contains newlines — Quill splits at \n
+// into separate paragraph blocks but loses the selection state, so subsequent text vanishes and
+// the send button stays disabled. Workaround: dispatch a synthetic paste event carrying the
+// full multi-line text in clipboardData. Quill's paste handler walks the plain-text payload
+// line by line and builds correct paragraph blocks, leaving a valid selection so the send
+// button enables normally.
 async function injectMessage(message) {
   const input = document.querySelector('rich-textarea .ql-editor')
     ?? document.querySelector('div[contenteditable="true"].ql-editor')
@@ -11,9 +19,24 @@ async function injectMessage(message) {
 
   document.execCommand('selectAll', false, undefined);
   document.execCommand('delete', false, undefined);
-  document.execCommand('insertText', false, message);
 
-  await sleep(300);
+  // Synthetic paste — the only reliable way to get multi-line content into Quill without
+  // losing intermediate lines. Fallback to execCommand for single-line strings keeps simple
+  // sends working even on edge-case builds that block ClipboardEvent construction.
+  let pasted = false;
+  try {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', message);
+    const evt = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+    pasted = input.dispatchEvent(evt);
+  } catch {}
+  if (!pasted) {
+    document.execCommand('insertText', false, message);
+  }
+
+  // Quill needs a longer settle after a multi-line paste before its send-button-enable logic
+  // runs. 500 ms covers worst case observed on the formatting-showcase prompt.
+  await sleep(500);
 
   const sendBtn = document.querySelector('button[aria-label="Send message"]')
     ?? document.querySelector('button.send-button')
