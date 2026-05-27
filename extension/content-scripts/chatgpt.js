@@ -1,25 +1,15 @@
-// injectMessage: locate ChatGPT's composer (textarea OR contenteditable) and submit the
-// message. Fires native input events so React state updates correctly.
+// injectMessage: locate ChatGPT's composer (textarea OR contenteditable) and submit.
+//
+// All actual typing logic lives in _wrapperr-input.js. The input module auto-selects the right
+// strategy based on the element type — textarea uses the React-prototype-setter route, the
+// newer contenteditable composer falls through to the synthetic-paste route.
 async function injectMessage(message) {
   const input = document.querySelector('#prompt-textarea')
     ?? document.querySelector('textarea[data-id="root"]')
     ?? document.querySelector('div[contenteditable="true"]');
   if (!input) throw new Error('ChatGPT input not found');
 
-  input.focus();
-
-  if (input.tagName === 'TEXTAREA') {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-    if (setter) setter.call(input, message);
-    else input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  } else {
-    input.textContent = '';
-    document.execCommand('insertText', false, message);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
-  }
-
-  await sleep(300);
+  await wrapperrInjectInput(input, { kind: 'text', text: message });
 
   const sendBtn = document.querySelector('[data-testid="send-button"]')
     ?? document.querySelector('button[aria-label="Send prompt"]')

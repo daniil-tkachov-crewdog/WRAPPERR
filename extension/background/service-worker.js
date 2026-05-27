@@ -47,11 +47,6 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 // ensureTab: returns a healthy tab on the AI's site, reusing the tracked tab when possible.
-// Three failure modes we have to handle, otherwise we either hang or open duplicate tabs:
-//   1. Tab was closed -> chrome.tabs.get throws, we fall through to creating a new tab.
-//   2. Tab was discarded by Chrome to save memory -> reload it instead of creating a new one.
-//   3. User (or a redirect) navigated the tab away from the AI's origin -> navigate it back.
-// Only check origin (URL host prefix), not the full URL, because each AI site uses many sub-paths.
 async function ensureTab(ai) {
   await tabMapReady;
   const tabId = tabMap[ai];
@@ -61,7 +56,6 @@ async function ensureTab(ai) {
       const tab = await chrome.tabs.get(tabId);
       if (tab) {
         if (tab.discarded) {
-          // Reload preserves the URL, so the in-progress conversation survives Chrome's memory saver.
           await chrome.tabs.reload(tabId);
           await waitForTabLoad(tabId);
           await sleep(2000);
@@ -85,7 +79,6 @@ async function ensureTab(ai) {
   tabMap[ai] = tab.id;
   await persistTabMap();
   await waitForTabLoad(tab.id);
-  // Extra settle time for SPA hydration
   await sleep(2000);
   return tab.id;
 }
@@ -99,7 +92,6 @@ function waitForTabLoad(tabId) {
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
-    // Also check immediately in case already loaded
     chrome.tabs.get(tabId).then((tab) => {
       if (tab.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
@@ -113,32 +105,24 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// injectContentScript: every AI gets shared helpers + the universal input module + its own
+// script chain. _wrapperr-input.js sits before AI scripts so wrapperrInjectInput() is defined
+// when each AI's injectMessage runs.
 async function injectContentScript(tabId, ai) {
   try {
-    // Inject the shared helper before the AI-specific script so its global
-    // wrapperrWaitForResponse() is defined when the AI script runs. Files are loaded in array
-    // order. Re-injecting on every send is safe — function declarations just get redefined.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['content-scripts/_wrapperr-shared.js', ...AI_SCRIPTS[ai]],
+      files: [
+        'content-scripts/_wrapperr-shared.js',
+        'content-scripts/_wrapperr-input.js',
+        ...AI_SCRIPTS[ai],
+      ],
     });
   } catch {
     // Script may already be injected
   }
 }
 
-// sendToAI: orchestrates a single message round-trip.
-//   1. Ensure the AI tab exists and is on the right origin.
-//   2. Inject the shared helper + AI-specific content script.
-//   3. Send WRAPPERR_INJECT_ONLY to type the message and click send. The content script returns
-//      a baseline (count + text of the last assistant message before injection) so we can
-//      distinguish the new response from any prior one.
-//   4. Poll WRAPPERR_GET_STATE every POLL_MS. Each poll returns the current best-known text
-//      (from the network capture buffer or DOM scrape). We track stability with our own timer
-//      here in the SW context — never throttled by tab visibility, unlike timers inside the
-//      AI tab itself.
-//   5. Resolve when the text has been non-empty, distinct from baseline, and unchanged for
-//      STABLE_MS. Hard timeout at HARD_MS.
 async function sendToAI(ai, message, requestId) {
   try {
     const tabId = await ensureTab(ai);
@@ -172,9 +156,6 @@ async function sendToAI(ai, message, requestId) {
   }
 }
 
-// pollForResponse: SW-side stability check. The tab itself never runs timers for this — its
-// content script just synchronously reads buffer + DOM on each GET_STATE. SW decides when the
-// response has stabilized.
 async function pollForResponse(tabId, ai, sentAt, baseline) {
   const POLL_MS = 500;
   const STABLE_MS = 1500;
@@ -200,14 +181,12 @@ async function pollForResponse(tabId, ai, sentAt, baseline) {
         await persistTabMap();
         throw new Error(msg);
       }
-      // Transient error — retry next poll.
       await sleep(POLL_MS);
       continue;
     }
 
     const text = (resp?.text || '').trim();
 
-    // Skip if it's the baseline itself (page hasn't rendered the new bubble yet).
     if (text === (baseline.text || '').trim() || text === '') {
       await sleep(POLL_MS);
       continue;
@@ -226,14 +205,12 @@ async function pollForResponse(tabId, ai, sentAt, baseline) {
   return lastText || 'No response received.';
 }
 
-// Listen for messages from content scripts (wrapperr-bridge.js or AI scripts)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'WRAPPERR_SEND') {
     const { ai, message, requestId } = msg;
 
     sendToAI(ai, message, requestId)
       .then((text) => {
-        // Send response back to the Wrapperr tab via wrapperr-bridge
         sendToWrapperrTab({ type: 'WRAPPERR_RESPONSE', requestId, response: text });
         sendResponse({ ok: true });
       })
@@ -242,14 +219,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: err.message });
       });
 
-    return true; // async response
+    return true;
   }
 
   if (msg.type === 'WRAPPERR_GET_STATUS') {
     pingWrapperrTab()
       .then((ok) => sendResponse({ status: ok ? 'connected' : 'issue' }))
       .catch(() => sendResponse({ status: 'issue' }));
-    return true; // async response
+    return true;
   }
 });
 
