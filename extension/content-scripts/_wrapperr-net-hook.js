@@ -1,7 +1,7 @@
-// MAIN-world fetch + WebSocket hook. Runs at document_start before any AI site script
-// executes. Tees streaming responses (fetch) and mirrors WebSocket frames so the body buffer
-// grows in real time even when the tab is throttled, while the page's own consumer still
-// receives unchanged data (its UI works as normal when focused).
+// MAIN-world fetch + XHR + WebSocket hook. Runs at document_start before any AI site script
+// executes. Tees streaming responses so the body buffer grows in real time even when the tab
+// is throttled, while the page's own consumer still receives unchanged data (its UI works as
+// normal when focused).
 //
 // Architecture: keep the body buffer in MAIN world (so we don't repeatedly serialize big
 // payloads to the isolated world), and emit lightweight `chunk` / `end` postMessage updates
@@ -17,21 +17,8 @@
   window.__wrapperrFetchHooked = true;
 
   // -------- per-AI capture rule registry --------
-  // Each per-AI MAIN-world rule file (e.g. providers/chatgpt-capture-rule.js) pushes one rule
-  // here at document_start. A rule has the shape:
-  //   { provider, hostPattern, urlPattern, contentTypes? }
-  // hostPattern: identifies whether this host has any registered rules (migrated to the registry).
-  // urlPattern:  the explicit URL allowlist for capture on this host.
-  // contentTypes (optional): if present, response Content-Type must include one of these strings.
-  // The hook reads __wrapperrCaptureRules on every request, so rules registered after the hook
-  // installs still take effect on the next fetch.
   window.__wrapperrCaptureRules ||= [];
 
-  // Legacy content-type sniffer. Used ONLY for hosts that have NOT registered any rule yet.
-  // Once a host is migrated (any rule for its hostPattern is present), the hook switches to
-  // default-deny for that host: only explicit allowlist matches are teed. This is what stops
-  // bootstrap/telemetry/auth responses from polluting the parser buffer on migrated AIs without
-  // affecting AIs that are still on the shared pipeline.
   const STREAMY_CT = ['text/event-stream', 'application/x-ndjson', 'application/jsonl'];
   const STREAMY_URL_PATTERNS = ['StreamGenerate', 'streamGenerateContent'];
   let counter = 0;
@@ -43,8 +30,6 @@
     return false;
   }
 
-  // findMatchingRule: explicit allow — URL matches an allowlist entry AND (when the rule pins
-  // content types) the response content-type matches one of the pinned values.
   function findMatchingRule(url, ct) {
     const rules = window.__wrapperrCaptureRules || [];
     for (const rule of rules) {
@@ -55,8 +40,6 @@
     return null;
   }
 
-  // hostIsMigrated: any rule whose hostPattern matches this URL means the host is in
-  // default-deny mode (only allowlisted URLs are teed). Used to gate the legacy fallback.
   function hostIsMigrated(url) {
     const rules = window.__wrapperrCaptureRules || [];
     for (const rule of rules) {
@@ -65,16 +48,20 @@
     return false;
   }
 
-  function shouldTee(response, url) {
-    const ct = (response.headers.get('content-type') || '').toLowerCase();
+  function shouldTeeFromCt(ct, url, channel) {
     const matched = findMatchingRule(url, ct);
     if (window.__wrapperrDebug) {
       const verdict = matched ? `allow (rule: ${matched.provider})` : (hostIsMigrated(url) ? 'deny (migrated host)' : 'legacy');
-      console.log('[wrapperr-net] POST response ct:', ct || '(empty)', 'url:', url, '|', verdict);
+      console.log('[wrapperr-net]', channel, 'POST response ct:', ct || '(empty)', 'url:', url, '|', verdict);
     }
     if (matched) return true;
     if (hostIsMigrated(url)) return false;
     return legacyLooksStreamy(ct, url);
+  }
+
+  function shouldTee(response, url) {
+    const ct = (response.headers.get('content-type') || '').toLowerCase();
+    return shouldTeeFromCt(ct, url, 'fetch');
   }
 
   function post(payload) {
@@ -136,11 +123,85 @@
     });
   };
 
+  // -------- XMLHttpRequest observer --------
+  // Gemini's StreamGenerate is dispatched via XHR, not fetch. We attach a readystatechange
+  // observer to every XHR; we do NOT alter responseType / responseText / abort behaviour.
+  // Reads happen ONLY through xhr.responseText inside try/catch — if the page set
+  // responseType to 'arraybuffer'/'blob', that getter throws and we silently skip. The page's
+  // own request flow is unchanged either way, so this can never break tab loading.
+  if (!window.__wrapperrXHRHooked) {
+    window.__wrapperrXHRHooked = true;
+    try {
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+
+      XMLHttpRequest.prototype.open = function (method, url) {
+        try {
+          this.__wrapperrMethod = (method || 'GET').toUpperCase();
+          this.__wrapperrUrl = String(url || '');
+        } catch {}
+        return origOpen.apply(this, arguments);
+      };
+
+      XMLHttpRequest.prototype.send = function () {
+        try {
+          if (this.__wrapperrMethod === 'POST') attachXHRObserver(this);
+        } catch {}
+        return origSend.apply(this, arguments);
+      };
+
+      function attachXHRObserver(xhr) {
+        const url = xhr.__wrapperrUrl || '';
+        const id = ++counter;
+        const startedAt = Date.now();
+        let started = false;
+        let lastLen = 0;
+        let lastBody = '';
+        let debuggedFirst = false;
+
+        xhr.addEventListener('readystatechange', function () {
+          try {
+            // readyState 2 = HEADERS_RECEIVED. Decide whether to tee using the response
+            // content-type; if not, never start, no further work for this xhr.
+            if (!started && xhr.readyState >= 2) {
+              const ct = (xhr.getResponseHeader && xhr.getResponseHeader('content-type') || '').toLowerCase();
+              if (!shouldTeeFromCt(ct, url, 'xhr')) return;
+              started = true;
+              post({ type: 'start', id, url, startedAt });
+            }
+            if (!started) return;
+
+            // States 3 (LOADING, partial) and 4 (DONE) both have readable responseText
+            // for text MIME types. Skip silently if the page used a non-text responseType.
+            if (xhr.readyState === 3 || xhr.readyState === 4) {
+              let text = '';
+              try { text = xhr.responseText || ''; } catch { text = ''; }
+              if (text.length > lastLen) {
+                lastLen = text.length;
+                lastBody = text;
+                if (window.__wrapperrDebug && !debuggedFirst) {
+                  debuggedFirst = true;
+                  console.log('[wrapperr-net] xhr first chunk url:', url, '\nbody prefix:\n', text.slice(0, 600));
+                }
+                post({ type: 'chunk', id, url, startedAt, body: text });
+              }
+              if (xhr.readyState === 4) {
+                post({ type: 'end', id, url, startedAt, body: lastBody });
+                if (window.__wrapperrDebug) console.log('[wrapperr-net] xhr end', url, 'bytes:', lastBody.length);
+              }
+            }
+          } catch (e) {
+            // Never let observer errors propagate to the page's own xhr handler chain.
+            if (window.__wrapperrDebug) console.warn('[wrapperr-net] xhr observer error', e);
+          }
+        });
+      }
+    } catch (e) {
+      if (window.__wrapperrDebug) console.warn('[wrapperr-net] xhr hook install failed', e);
+    }
+  }
+
   // -------- WebSocket hook --------
-  // ChatGPT and similar AIs deliver actual chat content over WS after a conduit-JWT POST.
-  // We Proxy window.WebSocket so instanceof and most introspection still work, listen to
-  // string frames, and emit `chunk` updates with the cumulative body on every frame. End
-  // events fire on close/error only — never on an internal timer.
   const origWebSocket = window.WebSocket;
   if (origWebSocket && !window.__wrapperrWSHooked) {
     window.__wrapperrWSHooked = true;
@@ -167,7 +228,6 @@
         try {
           ws.addEventListener('message', (event) => {
             if (typeof event.data !== 'string' || !event.data) return;
-            // Append a separator so SSE-style block parsing works on accumulated frames.
             body += event.data + '\n\n';
             post({ type: 'chunk', id, url, startedAt, body });
           });
