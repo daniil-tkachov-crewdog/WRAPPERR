@@ -1,40 +1,23 @@
-// injectMessage: locate Perplexity's composer and submit.
+// injectMessage: locate Perplexity's Lexical contenteditable composer and submit.
+//
+// Composer is Lexical (Meta's editor framework, sibling of ProseMirror/Tiptap). All actual
+// typing logic lives in _wrapperr-input.js (contenteditable strategy via execCommand). Known
+// risk: Lexical intercepts beforeinput events differently from ProseMirror — if insertHTML
+// stops working after a Lexical update, switch the contenteditable branch in
+// _wrapperr-input.js to execCommand('insertText') for this AI.
 async function injectMessage(message) {
-  const input = document.querySelector('textarea[placeholder*="Ask"]')
-    ?? document.querySelector('textarea[placeholder*="ask"]')
-    ?? document.querySelector('textarea')
-    ?? document.querySelector('div[contenteditable="true"][role="textbox"]')
-    ?? document.querySelector('[contenteditable="true"][aria-label*="Ask"]')
-    ?? document.querySelector('[contenteditable="true"][aria-placeholder]')
-    ?? document.querySelector('[contenteditable="true"]');
+  const input = document.querySelector('#ask-input')
+    ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
+    ?? document.querySelector('div[contenteditable="true"][role="textbox"]');
   if (!input) throw new Error('Perplexity input not found');
 
-  input.focus();
-  await sleep(200);
+  await wrapperrInjectInput(input, { kind: 'text', text: message });
 
-  if (input.tagName === 'TEXTAREA') {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-    if (setter) setter.call(input, message);
-    else input.value = message;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  } else {
-    document.execCommand('selectAll', false, undefined);
-    document.execCommand('delete', false, undefined);
-    document.execCommand('insertText', false, message);
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: message }));
-  }
-
-  await sleep(300);
-
-  const sendBtn = document.querySelector('button[aria-label="Submit"]')
-    ?? document.querySelector('button[aria-label*="Submit"]')
-    ?? document.querySelector('button[aria-label*="Send"]')
-    ?? document.querySelector('button[data-testid*="submit"]')
-    ?? document.querySelector('button[type="submit"]')
-    ?? [...document.querySelectorAll('button')].find(
-        (b) => b.getAttribute('aria-label')?.toLowerCase().includes('submit')
-          || b.getAttribute('aria-label')?.toLowerCase().includes('send')
-      );
+  // Send button has aria-label="Submit" + type="button" (NOT type="submit" — it's not in a
+  // form). Enter keydown fallback covers the rare case where the button is still :disabled
+  // when we click.
+  const sendBtn = document.querySelector('button[aria-label="Submit"][type="button"]')
+    ?? document.querySelector('button[aria-label="Submit"]');
 
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
@@ -43,7 +26,11 @@ async function injectMessage(message) {
   }
 }
 
-const RESPONSE_SELECTOR = '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown';
+// DOM-scrape fallback selector — last resort only. Perplexity renders Markdown as HTML, so
+// innerText here loses formatting symbols. The grace window in getCurrentState exists to
+// avoid hitting this path while the SSE buffer is still filling.
+const RESPONSE_SELECTOR =
+  '[class*="prose"], [class*="answer"], [class*="markdown"], .markdown';
 
 function getBaseline() {
   const messages = document.querySelectorAll(RESPONSE_SELECTOR);
@@ -52,16 +39,31 @@ function getBaseline() {
   return { count, text: last ? wrapperrBestText(last) : '' };
 }
 
+// Stream parser + buffer reader live in providers/perplexity-parser.js. They are injected
+// before this script by the service worker (see AI_SCRIPTS in background/service-worker.js)
+// and expose the global readBestPerplexityText() used below.
+
+// getCurrentState: network-first with a mandatory grace period before DOM fallback.
+// Perplexity's DOM renders markdown as HTML; falling back too early returns plain text and
+// the SW considers it stable, discarding the markdown forever. 3 s grace mirrors the fix
+// applied to Gemini and Grok for the same failure mode.
 function getCurrentState({ sentAt, baselineCount }) {
-  const netText = wrapperrReadBestStreamText(sentAt, 'perplexity');
-  if (netText) return netText;
+  const netText = readBestPerplexityText(sentAt);
+  if (netText) {
+    window.__wrapperrPerplexityDomGrace = null;
+    return netText;
+  }
+  const now = Date.now();
+  if (!window.__wrapperrPerplexityDomGrace) window.__wrapperrPerplexityDomGrace = now;
+  if (now - window.__wrapperrPerplexityDomGrace < 3000) return '';
   const messages = document.querySelectorAll(RESPONSE_SELECTOR);
   if (messages.length <= (baselineCount || 0)) return '';
   return wrapperrBestText(messages[messages.length - 1]);
 }
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
+// Message listener — guarded against double-installation if the script is re-injected.
+// Same shape as gemini.js / grok.js: WRAPPERR_INJECT_ONLY captures baseline + injects,
+// WRAPPERR_GET_STATE returns the current best response text for the SW's stability poller.
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
