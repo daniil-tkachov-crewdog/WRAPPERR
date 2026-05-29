@@ -95,12 +95,16 @@ async function injectViaContentEditable(el, text) {
   await new Promise((r) => setTimeout(r, 300));
 }
 
-// Contenteditable insertion for Lexical (Meta's editor framework; used by Perplexity). Lexical's
-// beforeinput interceptor consumes insertHTML payloads structurally — it honours the <p> tags
-// (so a paragraph break shows up) but drops the inner text, leaving an empty editor with one
-// stray newline. insertText fires beforeinput with inputType='insertText' which Lexical routes
-// through its own text-insertion path; multi-line strings work because Lexical converts the \n
-// chars to soft line breaks internally.
+// Contenteditable insertion for Lexical (Meta's editor framework; used by Perplexity).
+// Lexical's beforeinput interceptor consumes insertHTML payloads structurally — it honours
+// the <p> tags (so a paragraph break shows up) but drops the inner text, leaving an empty
+// editor with one stray newline. insertText routes through Lexical's own text path which
+// correctly inserts the literal characters.
+//
+// Newlines in a single insertText call are NOT honoured by Lexical — they end up as
+// invisible whitespace in the same paragraph (the bug that lost numbered-list formatting on
+// the first attempt). Real paragraph breaks require firing execCommand('insertParagraph')
+// between text segments, which is what Lexical does when the user actually presses Enter.
 async function injectViaContentEditableText(el, text) {
   const sel = window.getSelection();
   if (sel) {
@@ -110,7 +114,11 @@ async function injectViaContentEditableText(el, text) {
     sel.addRange(range);
   }
 
-  document.execCommand('insertText', false, text);
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0) document.execCommand('insertParagraph');
+    if (lines[i]) document.execCommand('insertText', false, lines[i]);
+  }
 
   // Lexical reconciles via mutation observer like ProseMirror; same 300 ms wait so the send
   // button finishes enabling before the caller clicks it.

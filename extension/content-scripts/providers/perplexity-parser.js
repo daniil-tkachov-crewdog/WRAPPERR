@@ -26,15 +26,25 @@
 // — same discipline that kept Grok's finalMetadata.followUpSuggestions from leaking into the
 // answer.
 //
+// Two-tier extraction:
+//   Tier 1 (preferred): the final SSE message (status:'COMPLETED', final_sse_message:true)
+//   replaces diff_block with a fully-materialised markdown_block whose `.answer` is the
+//   complete clean text. When present this is strictly better than chunk concatenation — it's
+//   immune to missing-delta failures (slow start / reconnect / sentAt-cutoff edge cases).
+//   Tier 2 (fallback while streaming): collect the diff patches and reconstruct from the
+//   chunks map. This is what powers the live-updating UI before the COMPLETED event arrives.
+//
 // CRITICAL: refuse loose fallbacks like obj.delta / obj.token / obj.completion / obj.v. The
 // ChatGPT migration's whole point was eliminating loose fallbacks that let bootstrap tokens
 // contaminate replies.
 function parsePerplexityStream(body) {
   if (!body || body.indexOf('ask_text_0_markdown') < 0) return '';
 
-  // chunks: map of index -> string fragment. Map keeps insertion-agnostic semantics; we sort
-  // by numeric index at the end so out-of-order arrival (rare but possible across reconnects)
-  // doesn't scramble the prose.
+  // finalAnswer: longest fully-materialised markdown_block.answer seen across the stream.
+  // chunks: map of index -> string fragment, the streaming-delta fallback.
+  // Map keeps insertion-agnostic semantics; we sort by numeric index at the end so
+  // out-of-order arrival (rare but possible across reconnects) doesn't scramble the prose.
+  let finalAnswer = '';
   const chunks = new Map();
 
   // SSE framing: events are separated by a blank line (\n\n). Each event may have multiple
@@ -53,11 +63,27 @@ function parsePerplexityStream(body) {
     if (!evt || !Array.isArray(evt.blocks)) continue;
 
     for (const block of evt.blocks) {
-      // Strict block filter: only the canonical ask_text_0_markdown block whose diff targets
-      // markdown_block. The duplicate `ask_text` block carries the same patches; matching on
-      // the canonical name (announced in top-level structured_answer_block_usages) avoids
-      // double-counting and naturally excludes all non-prose blocks.
+      // Strict block filter: only the canonical ask_text_0_markdown block. The duplicate
+      // `ask_text` block carries the same content; matching on the canonical name (announced
+      // in top-level structured_answer_block_usages) avoids double-counting and naturally
+      // excludes all non-prose blocks (plan, answer_tabs, pending_followups, classifier).
       if (!block || block.intended_usage !== 'ask_text_0_markdown') continue;
+
+      // Tier 1: materialised markdown_block on the final event. `.answer` is the canonical
+      // full text; `.chunks` is the array form (used as belt-and-braces if answer is missing).
+      const md = block.markdown_block;
+      if (md && typeof md === 'object') {
+        if (typeof md.answer === 'string' && md.answer.length > finalAnswer.length) {
+          finalAnswer = md.answer;
+        } else if (Array.isArray(md.chunks)) {
+          const joined = md.chunks.filter((c) => typeof c === 'string').join('');
+          if (joined.length > finalAnswer.length) finalAnswer = joined;
+        }
+        continue;
+      }
+
+      // Tier 2: streaming diff. Only honoured when diff_block targets markdown_block —
+      // refuses any other field so citation/metadata patches can't sneak in.
       const diff = block.diff_block;
       if (!diff || diff.field !== 'markdown_block' || !Array.isArray(diff.patches)) continue;
 
@@ -87,6 +113,9 @@ function parsePerplexityStream(body) {
     }
   }
 
+  // Prefer the materialised final answer when present (Tier 1). Falls back to the
+  // delta-reconstructed chunks during streaming (Tier 2).
+  if (finalAnswer) return finalAnswer;
   if (chunks.size === 0) return '';
   const sorted = [...chunks.keys()].sort((a, b) => a - b);
   return sorted.map((i) => chunks.get(i)).join('');
