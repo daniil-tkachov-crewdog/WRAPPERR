@@ -73,7 +73,13 @@
   // -------- fetch hook --------
   const origFetch = window.fetch.bind(window);
   window.fetch = async function wrapperrPatchedFetch(input, init) {
-    const url = typeof input === 'string' ? input : input?.url || '';
+    // URL extraction must handle three shapes: bare string, Request instance (.url), and
+    // URL instance (.href). Perplexity uses a URL object — its .url is undefined and
+    // a naive `input?.url || ''` falls through to '', which lets the rule filter miss
+    // /rest/sse/perplexity_ask and the body lands in the buffer with an empty url field.
+    const url = typeof input === 'string' ? input
+              : (typeof input?.url === 'string' ? input.url
+              : (typeof input?.href === 'string' ? input.href : ''));
     const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
     if (method !== 'POST') return origFetch(input, init);
 
