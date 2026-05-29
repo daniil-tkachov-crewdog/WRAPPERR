@@ -22,7 +22,10 @@
 //     payload: { kind: 'text', text: '...' }
 //              future:  { kind: 'voice', audio: Blob }
 //              future:  { kind: 'file',  files: File[], caption?: string }
-//     options: { strategy?: 'native-field' | 'contenteditable' }   // omit for auto-select
+//     options: { strategy?: 'native-field' | 'contenteditable' | 'contenteditable-text' }
+//              omit strategy for auto-select. 'contenteditable-text' is the Lexical-friendly
+//              variant (insertText instead of insertHTML) — see injectViaContentEditableText
+//              for why ProseMirror/Tiptap stay on the default but Lexical needs the override.
 async function wrapperrInjectInput(targetEl, payload, options) {
   if (!targetEl) throw new Error('wrapperrInjectInput: no target element');
   if (!payload || payload.kind !== 'text') {
@@ -38,6 +41,8 @@ async function wrapperrInjectInput(targetEl, payload, options) {
     await injectViaNativeField(targetEl, payload.text);
   } else if (strategy === 'contenteditable') {
     await injectViaContentEditable(targetEl, payload.text);
+  } else if (strategy === 'contenteditable-text') {
+    await injectViaContentEditableText(targetEl, payload.text);
   } else {
     throw new Error('wrapperrInjectInput: unknown strategy ' + strategy);
   }
@@ -87,5 +92,27 @@ async function injectViaContentEditable(el, text) {
 
   // Some editors (Quill, ProseMirror) reconcile DOM changes inside a microtask via mutation
   // observers; give them a tick before the caller checks send-button state.
+  await new Promise((r) => setTimeout(r, 300));
+}
+
+// Contenteditable insertion for Lexical (Meta's editor framework; used by Perplexity). Lexical's
+// beforeinput interceptor consumes insertHTML payloads structurally — it honours the <p> tags
+// (so a paragraph break shows up) but drops the inner text, leaving an empty editor with one
+// stray newline. insertText fires beforeinput with inputType='insertText' which Lexical routes
+// through its own text-insertion path; multi-line strings work because Lexical converts the \n
+// chars to soft line breaks internally.
+async function injectViaContentEditableText(el, text) {
+  const sel = window.getSelection();
+  if (sel) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  document.execCommand('insertText', false, text);
+
+  // Lexical reconciles via mutation observer like ProseMirror; same 300 ms wait so the send
+  // button finishes enabling before the caller clicks it.
   await new Promise((r) => setTimeout(r, 300));
 }

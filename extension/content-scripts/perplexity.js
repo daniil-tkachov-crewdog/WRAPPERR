@@ -1,17 +1,16 @@
 // injectMessage: locate Perplexity's Lexical contenteditable composer and submit.
 //
-// Composer is Lexical (Meta's editor framework, sibling of ProseMirror/Tiptap). All actual
-// typing logic lives in _wrapperr-input.js (contenteditable strategy via execCommand). Known
-// risk: Lexical intercepts beforeinput events differently from ProseMirror — if insertHTML
-// stops working after a Lexical update, switch the contenteditable branch in
-// _wrapperr-input.js to execCommand('insertText') for this AI.
+// Composer is Lexical (Meta's editor framework, sibling of ProseMirror/Tiptap). Forces the
+// 'contenteditable-text' strategy in _wrapperr-input.js because Lexical's beforeinput
+// interceptor drops insertHTML text payloads (honouring only the <p> structure) — using
+// insertText instead routes through Lexical's own text path and the prose lands correctly.
 async function injectMessage(message) {
   const input = document.querySelector('#ask-input')
     ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
     ?? document.querySelector('div[contenteditable="true"][role="textbox"]');
   if (!input) throw new Error('Perplexity input not found');
 
-  await wrapperrInjectInput(input, { kind: 'text', text: message });
+  await wrapperrInjectInput(input, { kind: 'text', text: message }, { strategy: 'contenteditable-text' });
 
   // Send button has aria-label="Submit" + type="button" (NOT type="submit" — it's not in a
   // form). Enter keydown fallback covers the rare case where the button is still :disabled
