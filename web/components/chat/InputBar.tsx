@@ -204,9 +204,10 @@ export default function InputBar({
           </div>
         )}
 
-        {/* Main bar: row layout. Left = action buttons (+, features, timeout). Center = textarea.
-            Right = AI model selector + send button. Order mirrors Perplexity (model on right). */}
-        <div className="flex items-end gap-2 bg-surface border border-border rounded-2xl px-3 py-3">
+        {/* Main bar: two-row layout. Top row = textarea (full width, more room to type).
+            Bottom row = action buttons split left/right. Left cluster: +, features, timeout.
+            Right cluster: model selector, send. Mirrors Perplexity/ChatGPT chat bars. */}
+        <div className="flex flex-col gap-2 bg-surface border border-border rounded-2xl px-3 pt-3 pb-2">
           {/* Hidden file input. The "+" button drives it via .click(). Placeholder — no upload. */}
           <input
             ref={fileInputRef}
@@ -214,6 +215,23 @@ export default function InputBar({
             className="hidden"
             onChange={handleFileChange}
           />
+
+          {/* Top row: textarea spans full width so the user has plenty of room to type. */}
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={disabled ? '' : 'Message…'}
+            disabled={disabled || loading}
+            rows={1}
+            className="w-full bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40 px-1 py-1 resize-none"
+          />
+
+          {/* Bottom row: action buttons split into left cluster (+, features, timeout) and
+              right cluster (model selector, send). justify-between pins them to the edges. */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
 
           {/* "+" button: opens the native file picker. Pure placeholder; file is never sent. */}
           <button
@@ -328,18 +346,10 @@ export default function InputBar({
             )}
           </div>
 
-          {/* Textarea: the actual message input. flex-1 so it eats the remaining space between
-              the left action buttons and the right model+send cluster. */}
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={disabled ? '' : 'Message…'}
-            disabled={disabled || loading}
-            rows={1}
-            className="flex-1 bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40 px-2 py-1"
-          />
+            </div>
+
+            {/* Right cluster: model selector + send button. */}
+            <div className="flex items-center gap-2 shrink-0">
 
           {/* AI model selector: Perplexity-style "Model ▾" — always shows the generic word
               "Model"; the currently active model is only marked inside the dropdown. */}
@@ -403,6 +413,8 @@ export default function InputBar({
               </svg>
             )}
           </button>
+            </div>
+          </div>
         </div>
 
         <p className="text-center text-muted text-xs mt-2">
