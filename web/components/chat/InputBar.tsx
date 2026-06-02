@@ -20,24 +20,11 @@ interface Props {
   onClearQuote?: () => void;
 }
 
-// TIMEOUT_OPTIONS: how long the extension waits for an AI response before giving up. Picked by
-// the user via the clock dropdown. Used as `timeoutMs` passed up to page.tsx.
 const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
   { ms: 30_000, label: '30s' },
   { ms: 60_000, label: '1m' },
   { ms: 120_000, label: '2m' },
   { ms: 300_000, label: '5m' },
-];
-
-// FEATURE_OPTIONS: placeholder feature pills (Web Search / Deep Research / Compare AI). Purely
-// visual right now — selecting one does nothing in the send pipeline. Wired into local state
-// only so the chosen pill highlights in blue (ChatGPT-style). When the real features land, this
-// state needs to be lifted up and threaded into the send call.
-type FeatureId = 'web-search' | 'deep-research' | 'compare-ai';
-const FEATURE_OPTIONS: { id: FeatureId; label: string }[] = [
-  { id: 'web-search', label: 'Web Search' },
-  { id: 'deep-research', label: 'Deep Research' },
-  { id: 'compare-ai', label: 'Compare AI' },
 ];
 
 export default function InputBar({
@@ -54,27 +41,14 @@ export default function InputBar({
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
-  const [featureOpen, setFeatureOpen] = useState(false);
-  // selectedFeature: which placeholder pill is active (Web Search / Deep Research / Compare AI).
-  // Null = none selected. Only one at a time, ChatGPT-style. Has zero effect on send right now.
-  const [selectedFeature, setSelectedFeature] = useState<FeatureId | null>(null);
-  // attachedFile: name of file the user picked via the "+" button. Placeholder only — the file
-  // bytes are never uploaded or sent anywhere; just the chip is rendered so the UI looks live.
-  const [attachedFile, setAttachedFile] = useState<string | null>(null);
-
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<HTMLDivElement>(null);
-  const featureRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
   const currentTimeoutLabel =
     TIMEOUT_OPTIONS.find((o) => o.ms === timeoutMs)?.label ?? `${Math.round(timeoutMs / 1000)}s`;
-  const currentFeature = FEATURE_OPTIONS.find((f) => f.id === selectedFeature) ?? null;
 
-  // Click-outside handler: closes any open dropdown when the user clicks elsewhere. Tracks all
-  // three popovers (AI model, timeout, feature) in one listener so we don't fight ourselves.
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -82,9 +56,6 @@ export default function InputBar({
       }
       if (timeoutRef.current && !timeoutRef.current.contains(e.target as Node)) {
         setTimeoutOpen(false);
-      }
-      if (featureRef.current && !featureRef.current.contains(e.target as Node)) {
-        setFeatureOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -118,9 +89,6 @@ export default function InputBar({
     onSendMessage(composed);
     setText('');
     onClearQuote?.();
-    // Attached file is placeholder — drop it after send so the chip clears as if it were sent.
-    setAttachedFile(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -131,25 +99,9 @@ export default function InputBar({
     setDropdownOpen(false);
   }
 
-  // handleFileChange: triggered when the user picks a file via the hidden <input type="file">.
-  // We only stash the filename for chip display — no upload, no read, no send. Placeholder until
-  // real attachments ship.
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) setAttachedFile(f.name);
-  }
-
-  // handleFeatureSelect: pick a placeholder feature pill, or deselect it if the same option is
-  // clicked again (ChatGPT-style toggle). Only one feature can be active at a time.
-  function handleFeatureSelect(id: FeatureId) {
-    setSelectedFeature((cur) => (cur === id ? null : id));
-    setFeatureOpen(false);
-  }
-
   return (
     <div className="border-t border-border bg-bg px-4 py-4">
       <div className="max-w-3xl mx-auto">
-        {/* Quote chip: shown when the user clicked "Ask about it" on a prior assistant message. */}
         {quote && (
           <div className="mb-2 flex items-start gap-2 bg-surface border border-border rounded-xl px-3 py-2">
             <svg
@@ -179,102 +131,46 @@ export default function InputBar({
             </button>
           </div>
         )}
-
-        {/* Attached-file chip: placeholder. Shows filename only — nothing is uploaded yet. */}
-        {attachedFile && (
-          <div className="mb-2 flex items-center gap-2 bg-surface border border-border rounded-xl px-3 py-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted shrink-0">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-            </svg>
-            <p className="flex-1 text-xs text-white truncate">{attachedFile}</p>
-            <span className="text-[10px] uppercase tracking-wide text-muted/60 shrink-0">Placeholder</span>
+        <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
+          {/* AI selector */}
+          <div className="relative shrink-0" ref={dropdownRef}>
             <button
-              onClick={() => {
-                setAttachedFile(null);
-                if (fileInputRef.current) fileInputRef.current.value = '';
-              }}
-              title="Remove file"
-              className="text-muted hover:text-white transition-colors shrink-0"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
-        )}
-
-        {/* Main bar: row layout. Left = action buttons (+, features, timeout). Center = textarea.
-            Right = AI model selector + send button. Order mirrors Perplexity (model on right). */}
-        <div className="flex items-end gap-2 bg-surface border border-border rounded-2xl px-3 py-3">
-          {/* Hidden file input. The "+" button drives it via .click(). Placeholder — no upload. */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={handleFileChange}
-          />
-
-          {/* "+" button: opens the native file picker. Pure placeholder; file is never sent. */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={loading}
-            title="Attach file (placeholder)"
-            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-          </button>
-
-          {/* Feature selector pill: Web Search / Deep Research / Compare AI. Highlights blue when
-              a feature is active (ChatGPT style). Placeholder — no effect on send. */}
-          <div className="relative shrink-0" ref={featureRef}>
-            <button
-              onClick={() => setFeatureOpen((v) => !v)}
+              onClick={() => setDropdownOpen((v) => !v)}
               disabled={loading}
-              title={currentFeature ? `${currentFeature.label} (placeholder)` : 'Features (placeholder)'}
-              className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 px-2.5 py-1.5 rounded-full border ${
-                currentFeature
-                  ? 'text-blue-300 border-blue-400/40 bg-blue-500/10 hover:bg-blue-500/15'
-                  : 'text-muted border-transparent hover:text-white hover:bg-white/5'
-              }`}
+              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 py-1"
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="2" y1="12" x2="22" y2="12"/>
-                <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
-              </svg>
-              <span>{currentFeature ? currentFeature.label : 'Features'}</span>
+              <span className="text-white">{currentAI.label}</span>
               <svg
                 width="10"
                 height="10"
                 viewBox="0 0 10 10"
                 fill="currentColor"
-                className={`transition-transform ${featureOpen ? 'rotate-180' : ''}`}
+                className={`transition-transform ${dropdownOpen ? 'rotate-180' : ''}`}
               >
                 <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
               </svg>
             </button>
 
-            {featureOpen && (
-              <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[170px]">
-                {FEATURE_OPTIONS.map((opt) => (
+            {dropdownOpen && (
+              <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[140px]">
+                {AI_MODELS.map((model) => (
+                  // comingSoon providers (e.g. Perplexity) are shown disabled with a label and
+                  // can't be selected — clicking does nothing.
                   <button
-                    key={opt.id}
-                    onClick={() => handleFeatureSelect(opt.id)}
+                    key={model.id}
+                    onClick={() => { if (!model.comingSoon) handleAISelect(model.id); }}
+                    disabled={model.comingSoon}
                     className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
-                      opt.id === selectedFeature
-                        ? 'text-blue-300 bg-blue-500/10'
+                      model.comingSoon
+                        ? 'text-muted/50 cursor-not-allowed'
+                        : model.id === selectedAI
+                        ? 'text-white bg-white/5'
                         : 'text-muted hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    <span>{opt.label}</span>
-                    {opt.id === selectedFeature && (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
+                    <span>{model.label}</span>
+                    {model.comingSoon && (
+                      <span className="text-[10px] uppercase tracking-wide text-muted/50">Coming soon</span>
                     )}
                   </button>
                 ))}
@@ -282,13 +178,15 @@ export default function InputBar({
             )}
           </div>
 
-          {/* Timeout selector: response-wait time. Sits to the right of features per spec. */}
+          <div className="w-px h-5 bg-border shrink-0" />
+
+          {/* Timeout selector */}
           <div className="relative shrink-0" ref={timeoutRef}>
             <button
               onClick={() => setTimeoutOpen((v) => !v)}
               disabled={loading}
               title="Response timeout"
-              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 px-2.5 py-1.5 rounded-full hover:bg-white/5"
+              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 py-1"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10"/>
@@ -328,8 +226,9 @@ export default function InputBar({
             )}
           </div>
 
-          {/* Textarea: the actual message input. flex-1 so it eats the remaining space between
-              the left action buttons and the right model+send cluster. */}
+          <div className="w-px h-5 bg-border shrink-0" />
+
+          {/* Textarea */}
           <textarea
             ref={textareaRef}
             value={text}
@@ -338,58 +237,10 @@ export default function InputBar({
             placeholder={disabled ? '' : 'Message…'}
             disabled={disabled || loading}
             rows={1}
-            className="flex-1 bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40 px-2 py-1"
+            className="flex-1 bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40"
           />
 
-          {/* AI model selector: Perplexity-style "Model ▾" — always shows the generic word
-              "Model"; the currently active model is only marked inside the dropdown. */}
-          <div className="relative shrink-0" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen((v) => !v)}
-              disabled={loading}
-              title={`Current: ${currentAI.label}`}
-              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 px-2.5 py-1.5 rounded-full hover:bg-white/5"
-            >
-              <span>Model</span>
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                fill="currentColor"
-                className={`transition-transform ${dropdownOpen ? 'rotate-180' : ''}`}
-              >
-                <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
-              </svg>
-            </button>
-
-            {dropdownOpen && (
-              <div className="absolute bottom-full mb-2 right-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[160px]">
-                {AI_MODELS.map((model) => (
-                  // comingSoon providers (e.g. Perplexity) are shown disabled with a label and
-                  // can't be selected — clicking does nothing.
-                  <button
-                    key={model.id}
-                    onClick={() => { if (!model.comingSoon) handleAISelect(model.id); }}
-                    disabled={model.comingSoon}
-                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
-                      model.comingSoon
-                        ? 'text-muted/50 cursor-not-allowed'
-                        : model.id === selectedAI
-                        ? 'text-white bg-white/5'
-                        : 'text-muted hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <span>{model.label}</span>
-                    {model.comingSoon && (
-                      <span className="text-[10px] uppercase tracking-wide text-muted/50">Coming soon</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Send button: submits the message via parent's onSendMessage handler. */}
+          {/* Send button */}
           <button
             onClick={handleSend}
             disabled={!text.trim() || disabled || loading}
