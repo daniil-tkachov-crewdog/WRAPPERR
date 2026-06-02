@@ -7,12 +7,16 @@
 if (!window.__wrapperrPerplexityInited) {
   window.__wrapperrPerplexityInited = true;
 
-  // injectMessage: locate Perplexity's Lexical contenteditable composer and submit.
+  // injectMessage: type the message into Perplexity's Lexical composer and press Send.
   //
-  // Composer is Lexical (Meta's editor framework, sibling of ProseMirror/Tiptap). Forces the
-  // 'contenteditable-text' strategy in _wrapperr-input.js because Lexical's beforeinput
-  // interceptor drops insertHTML text payloads (honouring only the <p> structure) — using
-  // insertText instead routes through Lexical's own text path and the prose lands correctly.
+  // Composer is Lexical (Meta's editor framework). Lexical is stubborn about programmatic input
+  // — different builds accept different injection techniques, and one that works today can stop
+  // working after a Perplexity update. So instead of betting on ONE method, we run a CASCADE:
+  // try a method, check whether it actually worked, and if not, clear the box and fall through
+  // to the next. The reliable success signal is the Submit button becoming active — Perplexity
+  // only shows/enables it once Lexical has registered real text in its OWN editorState (raw DOM
+  // text alone leaves Send dead). Whichever method flips Send on wins at runtime. Every method
+  // lives here so the whole mechanism stays inside the Perplexity file.
   async function injectMessage(message) {
     const findInput = () => document.querySelector('#ask-input')
       ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
@@ -20,35 +24,108 @@ if (!window.__wrapperrPerplexityInited) {
     let input = findInput();
     if (!input) throw new Error('Perplexity input not found');
 
-    // Inject, then VERIFY the text actually landed. On a freshly-loaded page Lexical sometimes
-    // isn't ready on the first attempt and silently drops insertText, leaving only a stray
-    // newline — the bug that previously only cleared by manually refreshing and resending. We
-    // retry up to 3 times, which does that "resend" automatically. wrapperrInjectInput already
-    // selectAll-overwrites, so a retry replaces whatever the failed attempt left behind.
-    const want = message.replace(/\s+/g, ' ').trim();
-    const probe = want.slice(0, Math.min(24, want.length));
-    for (let attempt = 0; attempt < 3; attempt++) {
-      input = findInput() || input;
-      await wrapperrInjectInput(input, { kind: 'text', text: message }, { strategy: 'contenteditable-text' });
-      const landed = (input.innerText || '').replace(/\s+/g, ' ').trim();
-      if (probe && landed.includes(probe)) break;
-    }
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    // Submit. The button (aria-label="Submit", type="button" — not a form submit) stays
-    // :disabled until Lexical registers the typed text, so clicking immediately misses and the
-    // old synthetic-Enter fallback never triggers Lexical's submit. Poll until the button is
-    // actually enabled (up to ~3 s), THEN click it.
+    // Submit button: aria-label="Submit", type="button". When the box is empty Perplexity shows
+    // a voice button instead, so the Submit button existing AND enabled is itself the proof that
+    // Lexical accepted our text.
     const getSendBtn = () => document.querySelector('button[aria-label="Submit"][type="button"]')
       ?? document.querySelector('button[aria-label="Submit"]');
-    const isEnabled = (b) => b && !b.disabled && b.getAttribute('aria-disabled') !== 'true';
-    for (let i = 0; i < 30; i++) {
-      const btn = getSendBtn();
-      if (isEnabled(btn)) { btn.click(); return; }
-      await new Promise((r) => setTimeout(r, 100));
+    const sendReady = () => {
+      const b = getSendBtn();
+      return (b && !b.disabled && b.getAttribute('aria-disabled') !== 'true') ? b : null;
+    };
+
+    // wake: a synthetic click initialises Lexical's internal cursor (focus() alone leaves its
+    // selection null and all input is ignored), then focus.
+    const wake = (el) => {
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      el.focus();
+    };
+    const fireBeforeInput = (el, inputType, data) => el.dispatchEvent(
+      new InputEvent('beforeinput', { inputType, data, bubbles: true, cancelable: true }));
+
+    // clearInput: wipe whatever a previous failed method left behind before trying the next.
+    const clearInput = (el) => {
+      wake(el);
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete');
+    };
+
+    // ---- Injection methods, tried in cascade order ----
+
+    // Method 1: beforeinput events — the path a real keystroke takes; Lexical reads event.data
+    // into its editorState.
+    const mBeforeInput = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
+      const lines = message.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) fireBeforeInput(el, 'insertParagraph', null);
+        if (lines[i]) fireBeforeInput(el, 'insertText', lines[i]);
+      }
+    };
+
+    // Method 2: execCommand insertText — synchronous DOM insert that some Lexical builds pick up
+    // through their input listener.
+    const mExecCommand = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
+      const lines = message.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) document.execCommand('insertParagraph');
+        if (lines[i]) document.execCommand('insertText', false, lines[i]);
+      }
+    };
+
+    // Method 3: synthetic paste — Lexical has a dedicated paste handler that reads clipboardData
+    // and inserts into its state.
+    const mPaste = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
+      const dt = new DataTransfer();
+      dt.setData('text/plain', message);
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    };
+
+    // Method 4: per-character keystroke simulation — slowest but closest to a human; some
+    // editors only commit on a full keydown / beforeinput / input / keyup cycle per character.
+    const mPerChar = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
+      for (const ch of message) {
+        if (ch === '\n') { fireBeforeInput(el, 'insertParagraph', null); continue; }
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+        fireBeforeInput(el, 'insertText', ch);
+        el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+      }
+    };
+
+    // Method 5: raw textContent + input event — last-ditch; writes the DOM directly and nudges
+    // any generic input listener.
+    const mTextContent = (el) => {
+      wake(el);
+      el.textContent = message;
+      el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: message, bubbles: true }));
+    };
+
+    const methods = [mBeforeInput, mExecCommand, mPaste, mPerChar, mTextContent];
+
+    for (const method of methods) {
+      input = findInput() || input;
+      clearInput(input);
+      await wait(60);
+      try { method(input); } catch (_) { /* method threw — fall through to the next */ }
+
+      // Give Lexical up to ~1.5 s to register the text and enable Submit. If it does, the method
+      // worked: click Send and we're done.
+      for (let i = 0; i < 15; i++) {
+        const btn = sendReady();
+        if (btn) { btn.click(); return; }
+        await wait(100);
+      }
     }
-    // Last resort if it never reported enabled: click whatever we found anyway.
-    const btn = getSendBtn();
-    if (btn) btn.click();
+
+    throw new Error('Perplexity: no injection method enabled Send');
   }
 
   // perplexityAnswerEl: locate the latest rendered answer container.
