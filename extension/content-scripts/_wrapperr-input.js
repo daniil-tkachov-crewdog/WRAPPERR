@@ -24,7 +24,7 @@
 //              future:  { kind: 'file',  files: File[], caption?: string }
 //     options: { strategy?: 'native-field' | 'contenteditable' | 'contenteditable-text' }
 //              omit strategy for auto-select. 'contenteditable-text' is the Lexical-friendly
-//              variant (insertText instead of insertHTML) — see injectViaContentEditableText
+//              variant (beforeinput events instead of insertHTML) — see injectViaContentEditableText
 //              for why ProseMirror/Tiptap stay on the default but Lexical needs the override.
 async function wrapperrInjectInput(targetEl, payload, options) {
   if (!targetEl) throw new Error('wrapperrInjectInput: no target element');
@@ -96,39 +96,41 @@ async function injectViaContentEditable(el, text) {
 }
 
 // Contenteditable insertion for Lexical (Meta's editor framework; used by Perplexity).
-// Lexical's beforeinput interceptor consumes insertHTML payloads structurally — it honours
-// the <p> tags (so a paragraph break shows up) but drops the inner text, leaving an empty
-// editor with one stray newline. insertText routes through Lexical's own text path which
-// correctly inserts the literal characters.
-//
-// Newlines in a single insertText call are NOT honoured by Lexical — they end up as
-// invisible whitespace in the same paragraph (the bug that lost numbered-list formatting on
-// the first attempt). Real paragraph breaks require firing execCommand('insertParagraph')
-// between text segments, which is what Lexical does when the user actually presses Enter.
+// Lexical does NOT register text written by execCommand('insertText'/'insertHTML') — those
+// land as raw DOM characters its editorState never sees, so the text shows but the Submit
+// button stays disabled. The reliable path is to dispatch the same `beforeinput` events a real
+// keystroke produces; Lexical's onBeforeInput reads event.data and updates its own state,
+// which enables Submit. See the body for the per-line insertText / insertParagraph sequence.
 async function injectViaContentEditableText(el, text) {
-  // Wake Lexical's editor selection with a synthetic pointer interaction BEFORE focusing.
-  // Lexical only initialises its internal cursor on a real click — calling el.focus() alone
-  // leaves that selection null, so execCommand('insertText') gets silently dropped and only a
-  // stray paragraph break lands (the "nothing pasted / only a newline" bug). Verified: the
-  // same insertText that failed after a bare focus() succeeds once these events fire first.
+  // Wake Lexical's editor selection with a synthetic pointer interaction, then focus. Lexical
+  // only initialises its internal cursor on a real click — focus() alone leaves that selection
+  // null and any input is ignored.
   el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
   el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-
-  // Now focus + select any existing content via the editor's OWN selection model (selectAll on
-  // the focused editable). The previous version hand-built a Range over the contenteditable
-  // root, which Lexical mishandles; selectAll is what it expects and the first insertText below
-  // overwrites that selection.
   el.focus();
+
+  // Select any existing content so the first insertText overwrites it (matters when an earlier
+  // failed attempt left a stray newline behind).
   document.execCommand('selectAll', false, null);
+
+  // Feed the text through Lexical via `beforeinput` insertText events — the exact path a real
+  // keystroke takes. Lexical's onBeforeInput reads event.data and writes it into its OWN
+  // editorState, which is what flips the Submit button to enabled. The previous
+  // execCommand('insertText') only wrote raw DOM characters that Lexical never registered, so
+  // the text showed but Send stayed disabled (the dead-button bug). Paragraph breaks go through
+  // the matching insertParagraph inputType, same as pressing Enter.
+  const fire = (inputType, data) => el.dispatchEvent(new InputEvent('beforeinput', {
+    inputType, data, bubbles: true, cancelable: true,
+  }));
 
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (i > 0) document.execCommand('insertParagraph');
-    if (lines[i]) document.execCommand('insertText', false, lines[i]);
+    if (i > 0) fire('insertParagraph', null);
+    if (lines[i]) fire('insertText', lines[i]);
   }
 
-  // Lexical reconciles via mutation observer like ProseMirror; same 300 ms wait so the send
-  // button finishes enabling before the caller clicks it.
+  // Lexical reconciles via mutation observer; give it a tick so the send button finishes
+  // enabling before the caller clicks it.
   await new Promise((r) => setTimeout(r, 300));
 }
