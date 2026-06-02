@@ -67,6 +67,12 @@
       "js": ["content-scripts/providers/perplexity-capture-rule.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["content-scripts/providers/deepseek-capture-rule.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {
