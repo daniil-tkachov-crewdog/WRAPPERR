@@ -106,13 +106,13 @@ async function injectViaContentEditable(el, text) {
 // the first attempt). Real paragraph breaks require firing execCommand('insertParagraph')
 // between text segments, which is what Lexical does when the user actually presses Enter.
 async function injectViaContentEditableText(el, text) {
-  const sel = window.getSelection();
-  if (sel) {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
+  // Put the caret in the editor and select any existing content via the editor's OWN selection
+  // model (focus + execCommand selectAll). The previous version hand-built a Range over the
+  // contenteditable root, which Lexical mishandles — it dropped the inserted text and left only
+  // a stray paragraph break (the "only a newline got pasted" bug). selectAll on the focused
+  // editable is what Lexical expects, and the first insertText below overwrites that selection.
+  el.focus();
+  document.execCommand('selectAll', false, null);
 
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
