@@ -73,6 +73,12 @@
       "js": ["content-scripts/providers/deepseek-capture-rule.js"],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["content-scripts/providers/claude-capture-rule.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {

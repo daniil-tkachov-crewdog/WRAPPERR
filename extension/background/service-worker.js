@@ -12,7 +12,7 @@ const AI_URLS = {
 // order listed; later files can rely on globals defined by earlier ones.
 const AI_SCRIPTS = {
   chatgpt:    ['content-scripts/providers/chatgpt-parser.js', 'content-scripts/chatgpt.js'],
-  claude:     ['content-scripts/claude.js'],
+  claude:     ['content-scripts/providers/claude-parser.js', 'content-scripts/claude.js'],
   grok:       ['content-scripts/providers/grok-parser.js', 'content-scripts/grok.js'],
   perplexity: ['content-scripts/providers/perplexity-parser.js', 'content-scripts/perplexity.js'],
   gemini:     ['content-scripts/providers/gemini-parser.js', 'content-scripts/gemini.js'],
