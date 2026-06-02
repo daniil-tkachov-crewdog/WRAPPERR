@@ -106,11 +106,19 @@ async function injectViaContentEditable(el, text) {
 // the first attempt). Real paragraph breaks require firing execCommand('insertParagraph')
 // between text segments, which is what Lexical does when the user actually presses Enter.
 async function injectViaContentEditableText(el, text) {
-  // Put the caret in the editor and select any existing content via the editor's OWN selection
-  // model (focus + execCommand selectAll). The previous version hand-built a Range over the
-  // contenteditable root, which Lexical mishandles — it dropped the inserted text and left only
-  // a stray paragraph break (the "only a newline got pasted" bug). selectAll on the focused
-  // editable is what Lexical expects, and the first insertText below overwrites that selection.
+  // Wake Lexical's editor selection with a synthetic pointer interaction BEFORE focusing.
+  // Lexical only initialises its internal cursor on a real click — calling el.focus() alone
+  // leaves that selection null, so execCommand('insertText') gets silently dropped and only a
+  // stray paragraph break lands (the "nothing pasted / only a newline" bug). Verified: the
+  // same insertText that failed after a bare focus() succeeds once these events fire first.
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+  // Now focus + select any existing content via the editor's OWN selection model (selectAll on
+  // the focused editable). The previous version hand-built a Range over the contenteditable
+  // root, which Lexical mishandles; selectAll is what it expects and the first insertText below
+  // overwrites that selection.
   el.focus();
   document.execCommand('selectAll', false, null);
 
