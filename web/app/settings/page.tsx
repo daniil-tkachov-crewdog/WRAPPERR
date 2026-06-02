@@ -16,6 +16,8 @@ import AccountTab from '@/components/settings/AccountTab';
 
 type Tab = 'general' | 'commands' | 'memory' | 'security' | 'billing' | 'account';
 
+// TABS: top-level Settings categories rendered in the left nav. Source of truth for the URL
+// ?tab= param too — keep IDs stable or you'll break old bookmarks.
 const TABS: { id: Tab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'commands', label: 'Commands' },
@@ -25,6 +27,16 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'account', label: 'Account' },
 ];
 
+// PLACEHOLDER_PROFILE: dummy Profile fed to tab components when there's no real Supabase
+// session. Mirrors the shape of a real Profile row so existing tabs render fields without
+// crashing. Used together with placeholderMode, which freezes all inputs via a wrapper.
+const PLACEHOLDER_PROFILE: Profile = {
+  id: 'placeholder',
+  name: '',
+  default_ai: 'chatgpt',
+  appearance: 'dark',
+};
+
 function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -32,10 +44,17 @@ function SettingsContent() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // placeholderMode: true when we couldn't establish a real Supabase session (or the profile
+  // fetch failed). UI still renders fully but all inputs are visually frozen via a
+  // pointer-events-none / reduced-opacity wrapper around the tab content. Flip this off once
+  // Supabase auth and RLS issues are sorted, and the page will go back to fully interactive.
+  const [placeholderMode, setPlaceholderMode] = useState(false);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
+  // Session + data bootstrap. Previously bailed to /login on any auth failure; now we instead
+  // drop into placeholderMode so the user can still navigate the Settings UI even when
+  // Supabase is misbehaving (the original reason this page was "disabled").
   useEffect(() => {
     const supabase = createClient();
 
@@ -49,13 +68,12 @@ function SettingsContent() {
     }
 
     getSessionWithRetry().then(async ({ data: { session }, error: sessionError }) => {
-      if (sessionError) {
-        setError(`Auth error: ${sessionError.message}`);
+      if (sessionError || !session?.user) {
+        // No real session — render the page in placeholder mode with a dummy profile so the
+        // tab components still mount. No redirects, no Supabase writes.
+        setProfile(PLACEHOLDER_PROFILE);
+        setPlaceholderMode(true);
         setLoading(false);
-        return;
-      }
-      if (!session?.user) {
-        router.push('/login');
         return;
       }
       setUser(session.user);
@@ -65,43 +83,30 @@ function SettingsContent() {
         .select('*')
         .eq('id', session.user.id)
         .maybeSingle();
-      if (profileError) {
-        setError(`Failed to load profile: ${profileError.message} (code: ${profileError.code})`);
+      if (profileError || !profileData) {
+        // Profile fetch broken (RLS / schema / etc.) — fall back to placeholder rather than
+        // showing a red error banner.
+        setProfile(PLACEHOLDER_PROFILE);
+        setPlaceholderMode(true);
         setLoading(false);
         return;
       }
-      if (profileData) {
-        setProfile(profileData as Profile);
-      } else {
-        const { data: newProfile, error: insertError } = await supabase
-          .from('profiles')
-          .upsert({ id: session.user.id, name: '', default_ai: 'chatgpt', appearance: 'dark' })
-          .select()
-          .single();
-        if (insertError) {
-          setError(`Failed to create profile: ${insertError.message} (code: ${insertError.code})`);
-          setLoading(false);
-          return;
-        }
-        if (newProfile) setProfile(newProfile as Profile);
-      }
+      setProfile(profileData as Profile);
 
-      const { data: chatData, error: chatError } = await supabase
+      const { data: chatData } = await supabase
         .from('chats')
         .select('id, name, ai_model, updated_at')
         .eq('user_id', session.user.id)
         .order('updated_at', { ascending: false })
         .limit(MAX_CHATS);
-      if (chatError) {
-        setError(`Failed to load chats: ${chatError.message} (code: ${chatError.code})`);
-        setLoading(false);
-        return;
-      }
       if (chatData) setChats(chatData as ChatSummary[]);
 
       setLoading(false);
-    }).catch((err: unknown) => {
-      setError(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+    }).catch(() => {
+      // Unexpected throw — same fallback path. The page must never be inaccessible just
+      // because Supabase is unreachable.
+      setProfile(PLACEHOLDER_PROFILE);
+      setPlaceholderMode(true);
       setLoading(false);
     });
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -122,16 +127,8 @@ function SettingsContent() {
     );
   }
 
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-bg">
-        <div className="max-w-md w-full mx-4 p-4 bg-red-600/10 border border-red-500/30 rounded-xl">
-          <p className="text-sm font-medium text-red-400 mb-1">Settings failed to load</p>
-          <p className="text-xs text-red-300/80 font-mono break-all">{error}</p>
-        </div>
-      </div>
-    );
-  }
+  // effectiveProfile: in placeholder mode we still need a Profile-shaped object for the tabs.
+  const effectiveProfile = profile ?? PLACEHOLDER_PROFILE;
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
@@ -164,27 +161,47 @@ function SettingsContent() {
           ))}
         </div>
 
-        {/* Tab content */}
+        {/* Tab content area. In placeholderMode we wrap the content in a non-interactive,
+            dimmed container and show a banner explaining why nothing reacts. */}
         <div className="flex-1 overflow-y-auto p-8">
-          {activeTab === 'general' && profile && (
-            <GeneralTab
-              profile={profile}
-              onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
-            />
+          {placeholderMode && (
+            <div className="mb-6 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300/90 max-w-2xl">
+              Settings are currently shown as read-only placeholders while we resolve Supabase
+              auth and storage issues. Fields and tabs are visible for layout reference, but
+              edits won&apos;t persist.
+            </div>
           )}
-          {activeTab === 'commands' && <CommandsTab />}
-          {activeTab === 'memory' && (
-            <MemoryTab chats={chats} onChatDeleted={handleChatDeleted} />
-          )}
-          {activeTab === 'security' && <SecurityTab />}
-          {activeTab === 'billing' && <BillingTab />}
-          {activeTab === 'account' && user && profile && (
-            <AccountTab
-              user={user}
-              profile={profile}
-              onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
-            />
-          )}
+
+          <div
+            className={
+              placeholderMode
+                ? 'pointer-events-none opacity-60 select-none'
+                : ''
+            }
+            aria-disabled={placeholderMode}
+          >
+            {activeTab === 'general' && (
+              <GeneralTab
+                profile={effectiveProfile}
+                onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
+              />
+            )}
+            {activeTab === 'commands' && <CommandsTab />}
+            {activeTab === 'memory' && (
+              <MemoryTab chats={chats} onChatDeleted={handleChatDeleted} />
+            )}
+            {activeTab === 'security' && <SecurityTab />}
+            {activeTab === 'billing' && <BillingTab />}
+            {activeTab === 'account' && (
+              // AccountTab needs a real user object (email, id) to render. In placeholder mode
+              // we synthesise a minimal stub so the tab still mounts with empty values.
+              <AccountTab
+                user={user ?? ({ id: 'placeholder', email: 'placeholder@example.com' } as User)}
+                profile={effectiveProfile}
+                onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
+              />
+            )}
+          </div>
         </div>
       </main>
     </div>
