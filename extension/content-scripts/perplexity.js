@@ -14,24 +14,41 @@ if (!window.__wrapperrPerplexityInited) {
   // interceptor drops insertHTML text payloads (honouring only the <p> structure) — using
   // insertText instead routes through Lexical's own text path and the prose lands correctly.
   async function injectMessage(message) {
-    const input = document.querySelector('#ask-input')
+    const findInput = () => document.querySelector('#ask-input')
       ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
       ?? document.querySelector('div[contenteditable="true"][role="textbox"]');
+    let input = findInput();
     if (!input) throw new Error('Perplexity input not found');
 
-    await wrapperrInjectInput(input, { kind: 'text', text: message }, { strategy: 'contenteditable-text' });
-
-    // Send button has aria-label="Submit" + type="button" (NOT type="submit" — it's not in a
-    // form). Enter keydown fallback covers the rare case where the button is still :disabled
-    // when we click.
-    const sendBtn = document.querySelector('button[aria-label="Submit"][type="button"]')
-      ?? document.querySelector('button[aria-label="Submit"]');
-
-    if (sendBtn && !sendBtn.disabled) {
-      sendBtn.click();
-    } else {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    // Inject, then VERIFY the text actually landed. On a freshly-loaded page Lexical sometimes
+    // isn't ready on the first attempt and silently drops insertText, leaving only a stray
+    // newline — the bug that previously only cleared by manually refreshing and resending. We
+    // retry up to 3 times, which does that "resend" automatically. wrapperrInjectInput already
+    // selectAll-overwrites, so a retry replaces whatever the failed attempt left behind.
+    const want = message.replace(/\s+/g, ' ').trim();
+    const probe = want.slice(0, Math.min(24, want.length));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      input = findInput() || input;
+      await wrapperrInjectInput(input, { kind: 'text', text: message }, { strategy: 'contenteditable-text' });
+      const landed = (input.innerText || '').replace(/\s+/g, ' ').trim();
+      if (probe && landed.includes(probe)) break;
     }
+
+    // Submit. The button (aria-label="Submit", type="button" — not a form submit) stays
+    // :disabled until Lexical registers the typed text, so clicking immediately misses and the
+    // old synthetic-Enter fallback never triggers Lexical's submit. Poll until the button is
+    // actually enabled (up to ~3 s), THEN click it.
+    const getSendBtn = () => document.querySelector('button[aria-label="Submit"][type="button"]')
+      ?? document.querySelector('button[aria-label="Submit"]');
+    const isEnabled = (b) => b && !b.disabled && b.getAttribute('aria-disabled') !== 'true';
+    for (let i = 0; i < 30; i++) {
+      const btn = getSendBtn();
+      if (isEnabled(btn)) { btn.click(); return; }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // Last resort if it never reported enabled: click whatever we found anyway.
+    const btn = getSendBtn();
+    if (btn) btn.click();
   }
 
   // perplexityAnswerEl: locate the latest rendered answer container.
