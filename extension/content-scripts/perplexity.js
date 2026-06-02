@@ -9,12 +9,15 @@ if (!window.__wrapperrPerplexityInited) {
 
   // injectMessage: type the message into Perplexity's Lexical composer and press Send.
   //
-  // Composer is Lexical (Meta's editor framework). The proven-working technique is
-  // execCommand('insertText'): it makes Lexical register the text in its OWN editorState, which
-  // is what enables the Submit button (raw DOM text alone leaves Send dead). The first attempt
-  // on a freshly-loaded page sometimes misses, so we RETRY — and before each attempt we clear
-  // the box bulletproof-ly (see clearInput) so a missed attempt can never leave leftover text
-  // that the next attempt doubles up on (the "Sem says hello to uSem says hello to u" bug).
+  // Composer is Lexical (Meta's editor framework). Hard-won recipe from live testing:
+  //   • execCommand('insertText') ALONE does not work — Lexical ignores it and Send stays dead.
+  //   • A synthetic `beforeinput` insertText event PRIMES Lexical (sets up its selection/intent)
+  //     but on its own also leaves Send dead.
+  //   • Doing the beforeinput PRIME and THEN the execCommand COMMIT is what actually registers
+  //     the text in Lexical's editorState and enables the Submit button.
+  // The naive prime+commit leaves the text twice (the prime copy + the commit copy), so after
+  // Send lights up — i.e. once Lexical is reliably registering execCommand edits — we select all
+  // and re-insert the message ONCE to leave a single clean copy. Then click Send.
   async function injectMessage(message) {
     const findInput = () => document.querySelector('#ask-input')
       ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
@@ -23,10 +26,8 @@ if (!window.__wrapperrPerplexityInited) {
     if (!input) throw new Error('Perplexity input not found');
 
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const lines = message.split('\n');
 
-    // Submit button: aria-label="Submit", type="button". When the box is empty Perplexity shows
-    // a voice button instead, so the Submit button existing AND enabled is itself the proof that
-    // Lexical accepted our text.
     const getSendBtn = () => document.querySelector('button[aria-label="Submit"][type="button"]')
       ?? document.querySelector('button[aria-label="Submit"]');
     const sendReady = () => {
@@ -34,35 +35,27 @@ if (!window.__wrapperrPerplexityInited) {
       return (b && !b.disabled && b.getAttribute('aria-disabled') !== 'true') ? b : null;
     };
 
-    // wake: a synthetic click initialises Lexical's internal cursor (focus() alone leaves its
-    // selection null and all input is ignored), then focus.
+    // wake: synthetic click initialises Lexical's internal cursor (focus() alone leaves it null).
     const wake = (el) => {
       el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
       el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       el.focus();
     };
+    const fireBeforeInput = (el, inputType, data) => el.dispatchEvent(
+      new InputEvent('beforeinput', { inputType, data, bubbles: true, cancelable: true }));
 
-    // clearInput: empty the box before each attempt. selectAll+delete clears text Lexical has
-    // registered; if stray raw-DOM text survives (a missed attempt Lexical never registered,
-    // which its own selectAll won't select), we wipe the element's text directly so the next
-    // attempt starts truly empty and never doubles the message.
-    const clearInput = (el) => {
-      wake(el);
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete');
-      if ((el.innerText || '').replace(/\s+/g, '').length) {
-        el.textContent = '';
-        el.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward', bubbles: true }));
+    // prime: beforeinput pass that wakes up Lexical's text pipeline.
+    const prime = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) fireBeforeInput(el, 'insertParagraph', null);
+        if (lines[i]) fireBeforeInput(el, 'insertText', lines[i]);
       }
     };
-
-    // typeIn: the actual injection — execCommand insertText per line, insertParagraph between
-    // lines (what pressing Enter does), so multi-line prompts keep their breaks.
-    const typeIn = (el) => {
-      wake(el);
-      document.execCommand('selectAll', false, null);
-      const lines = message.split('\n');
+    // commit: execCommand pass that actually registers text in Lexical's state (enables Submit).
+    const commit = (el) => {
+      wake(el); document.execCommand('selectAll', false, null);
       for (let i = 0; i < lines.length; i++) {
         if (i > 0) document.execCommand('insertParagraph');
         if (lines[i]) document.execCommand('insertText', false, lines[i]);
@@ -71,17 +64,34 @@ if (!window.__wrapperrPerplexityInited) {
 
     for (let attempt = 0; attempt < 4; attempt++) {
       input = findInput() || input;
-      clearInput(input);
-      await wait(60);
-      typeIn(input);
+      // Start clean: select-all + delete clears Lexical-registered text; textContent wipe clears
+      // any stray raw text a previous attempt left that Lexical's selectAll won't cover.
+      wake(input);
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete');
+      if ((input.innerText || '').replace(/\s+/g, '').length) input.textContent = '';
 
-      // Give Lexical up to ~1.5 s to register the text and enable Submit. If it does, click and
-      // we're done; otherwise loop clears and retries.
-      for (let i = 0; i < 15; i++) {
-        const btn = sendReady();
-        if (btn) { btn.click(); return; }
-        await wait(100);
+      prime(input);
+      commit(input);
+
+      // Wait for Send to enable — proof the prime+commit registered the text.
+      let ready = false;
+      for (let i = 0; i < 15; i++) { if (sendReady()) { ready = true; break; } await wait(100); }
+      if (!ready) continue; // retry the whole prime+commit
+
+      // Lexical is now registering execCommand edits, so a clean select-all + re-insert leaves a
+      // SINGLE copy (removing the prime+commit duplication) without disabling Send.
+      wake(input);
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete');
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) document.execCommand('insertParagraph');
+        if (lines[i]) document.execCommand('insertText', false, lines[i]);
       }
+
+      // Click Send once it's enabled with the single clean copy.
+      for (let i = 0; i < 15; i++) { const b = sendReady(); if (b) { b.click(); return; } await wait(100); }
+      const b = getSendBtn(); if (b) { b.click(); return; }
     }
 
     throw new Error('Perplexity: Send never enabled after injecting');
