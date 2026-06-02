@@ -154,16 +154,24 @@ export default function InputBar({
             {dropdownOpen && (
               <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[140px]">
                 {AI_MODELS.map((model) => (
+                  // comingSoon providers (e.g. Perplexity) are shown disabled with a label and
+                  // can't be selected — clicking does nothing.
                   <button
                     key={model.id}
-                    onClick={() => handleAISelect(model.id)}
-                    className={`w-full text-left px-4 py-2 text-sm transition-colors ${
-                      model.id === selectedAI
+                    onClick={() => { if (!model.comingSoon) handleAISelect(model.id); }}
+                    disabled={model.comingSoon}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
+                      model.comingSoon
+                        ? 'text-muted/50 cursor-not-allowed'
+                        : model.id === selectedAI
                         ? 'text-white bg-white/5'
                         : 'text-muted hover:text-white hover:bg-white/5'
                     }`}
                   >
-                    {model.label}
+                    <span>{model.label}</span>
+                    {model.comingSoon && (
+                      <span className="text-[10px] uppercase tracking-wide text-muted/50">Coming soon</span>
+                    )}
                   </button>
                 ))}
               </div>

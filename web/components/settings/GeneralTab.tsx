@@ -54,8 +54,11 @@ export default function GeneralTab({ profile, onProfileUpdate }: Props) {
               onChange={(e) => setDefaultAI(e.target.value as AIModel)}
               className="w-full bg-surface border border-border rounded-lg px-3 py-2.5 text-white text-sm outline-none focus:border-white/30 transition-colors"
             >
+              {/* comingSoon providers (e.g. Perplexity) can't be chosen as the default AI. */}
               {AI_MODELS.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+                <option key={m.id} value={m.id} disabled={m.comingSoon}>
+                  {m.label}{m.comingSoon ? ' (Coming soon)' : ''}
+                </option>
               ))}
             </select>
           </div>
