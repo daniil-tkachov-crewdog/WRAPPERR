@@ -41,9 +41,13 @@ export default function InputBar({
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
+  // attachedFile: filename the user picked via the "+" button. Placeholder only — the file
+  // bytes are never read or uploaded. Just rendered as a chip and cleared on send.
+  const [attachedFile, setAttachedFile] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
   const currentTimeoutLabel =
@@ -89,9 +93,20 @@ export default function InputBar({
     onSendMessage(composed);
     setText('');
     onClearQuote?.();
+    // Attached file is placeholder — drop the chip after send so the next message starts clean.
+    setAttachedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+  }
+
+  // handleFileChange: fires when the user picks a file via the hidden <input type="file">.
+  // Stashes the filename only — never reads, uploads, or sends the file. Placeholder until
+  // real attachment support lands.
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) setAttachedFile(f.name);
   }
 
   function handleAISelect(ai: AIModel) {
@@ -131,7 +146,53 @@ export default function InputBar({
             </button>
           </div>
         )}
+
+        {/* Attached-file chip: placeholder. Shows filename only — nothing is uploaded yet. */}
+        {attachedFile && (
+          <div className="mb-2 flex items-center gap-2 bg-surface border border-border rounded-xl px-3 py-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted shrink-0">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+            <p className="flex-1 text-xs text-white truncate">{attachedFile}</p>
+            <span className="text-[10px] uppercase tracking-wide text-muted/60 shrink-0">Placeholder</span>
+            <button
+              onClick={() => {
+                setAttachedFile(null);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}
+              title="Remove file"
+              className="text-muted hover:text-white transition-colors shrink-0"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
+          {/* Hidden file input. The "+" button triggers it via .click(). Placeholder — no upload. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
+          {/* "+" button: opens the native file picker. Pure placeholder; file is never sent. */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            title="Attach file (placeholder)"
+            className="shrink-0 w-8 h-8 flex items-center justify-center rounded-full text-muted hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+
           {/* Timeout selector */}
           <div className="relative shrink-0" ref={timeoutRef}>
             <button
