@@ -27,6 +27,17 @@ const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
   { ms: 300_000, label: '5m' },
 ];
 
+// FEATURE_OPTIONS: placeholder feature pills (Web Search / Deep Research / Compare AI). Purely
+// visual right now — selecting one does nothing in the send pipeline. Wired into local state
+// only so the chosen pill highlights in blue (ChatGPT-style). When the real features land, lift
+// this state up and thread it into the send call.
+type FeatureId = 'web-search' | 'deep-research' | 'compare-ai';
+const FEATURE_OPTIONS: { id: FeatureId; label: string }[] = [
+  { id: 'web-search', label: 'Web Search' },
+  { id: 'deep-research', label: 'Deep Research' },
+  { id: 'compare-ai', label: 'Compare AI' },
+];
+
 export default function InputBar({
   selectedAI,
   timeoutMs,
@@ -41,17 +52,23 @@ export default function InputBar({
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
+  const [featureOpen, setFeatureOpen] = useState(false);
+  // selectedFeature: which placeholder pill is active. Null = none. Only one at a time
+  // (ChatGPT-style). Has zero effect on send right now.
+  const [selectedFeature, setSelectedFeature] = useState<FeatureId | null>(null);
   // attachedFile: filename the user picked via the "+" button. Placeholder only — the file
   // bytes are never read or uploaded. Just rendered as a chip and cleared on send.
   const [attachedFile, setAttachedFile] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<HTMLDivElement>(null);
+  const featureRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
   const currentTimeoutLabel =
     TIMEOUT_OPTIONS.find((o) => o.ms === timeoutMs)?.label ?? `${Math.round(timeoutMs / 1000)}s`;
+  const currentFeature = FEATURE_OPTIONS.find((f) => f.id === selectedFeature) ?? null;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -60,6 +77,9 @@ export default function InputBar({
       }
       if (timeoutRef.current && !timeoutRef.current.contains(e.target as Node)) {
         setTimeoutOpen(false);
+      }
+      if (featureRef.current && !featureRef.current.contains(e.target as Node)) {
+        setFeatureOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -107,6 +127,14 @@ export default function InputBar({
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (f) setAttachedFile(f.name);
+  }
+
+  // handleFeatureSelect: pick a placeholder feature pill, or deselect it if the same option is
+  // clicked again (ChatGPT-style toggle). Only one feature can be active at a time. No effect
+  // on the send pipeline.
+  function handleFeatureSelect(id: FeatureId) {
+    setSelectedFeature((cur) => (cur === id ? null : id));
+    setFeatureOpen(false);
   }
 
   function handleAISelect(ai: AIModel) {
@@ -192,6 +220,60 @@ export default function InputBar({
               <line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
           </button>
+
+          {/* Feature selector pill: Web Search / Deep Research / Compare AI. Highlights blue
+              when a feature is active (ChatGPT style). Placeholder — no effect on send. */}
+          <div className="relative shrink-0" ref={featureRef}>
+            <button
+              onClick={() => setFeatureOpen((v) => !v)}
+              disabled={loading}
+              title={currentFeature ? `${currentFeature.label} (placeholder)` : 'Features (placeholder)'}
+              className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 px-2.5 py-1 rounded-full border ${
+                currentFeature
+                  ? 'text-blue-300 border-blue-400/40 bg-blue-500/10 hover:bg-blue-500/15'
+                  : 'text-muted border-transparent hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="2" y1="12" x2="22" y2="12"/>
+                <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>
+              </svg>
+              <span>{currentFeature ? currentFeature.label : 'Features'}</span>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="currentColor"
+                className={`transition-transform ${featureOpen ? 'rotate-180' : ''}`}
+              >
+                <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+              </svg>
+            </button>
+
+            {featureOpen && (
+              <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[170px]">
+                {FEATURE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => handleFeatureSelect(opt.id)}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
+                      opt.id === selectedFeature
+                        ? 'text-blue-300 bg-blue-500/10'
+                        : 'text-muted hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {opt.id === selectedFeature && (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Timeout selector */}
           <div className="relative shrink-0" ref={timeoutRef}>
