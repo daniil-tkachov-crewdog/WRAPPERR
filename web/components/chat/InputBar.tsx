@@ -132,54 +132,6 @@ export default function InputBar({
           </div>
         )}
         <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
-          {/* AI selector */}
-          <div className="relative shrink-0" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen((v) => !v)}
-              disabled={loading}
-              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 py-1"
-            >
-              <span className="text-white">{currentAI.label}</span>
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                fill="currentColor"
-                className={`transition-transform ${dropdownOpen ? 'rotate-180' : ''}`}
-              >
-                <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
-              </svg>
-            </button>
-
-            {dropdownOpen && (
-              <div className="absolute bottom-full mb-2 left-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[140px]">
-                {AI_MODELS.map((model) => (
-                  // comingSoon providers (e.g. Perplexity) are shown disabled with a label and
-                  // can't be selected — clicking does nothing.
-                  <button
-                    key={model.id}
-                    onClick={() => { if (!model.comingSoon) handleAISelect(model.id); }}
-                    disabled={model.comingSoon}
-                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
-                      model.comingSoon
-                        ? 'text-muted/50 cursor-not-allowed'
-                        : model.id === selectedAI
-                        ? 'text-white bg-white/5'
-                        : 'text-muted hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <span>{model.label}</span>
-                    {model.comingSoon && (
-                      <span className="text-[10px] uppercase tracking-wide text-muted/50">Coming soon</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="w-px h-5 bg-border shrink-0" />
-
           {/* Timeout selector */}
           <div className="relative shrink-0" ref={timeoutRef}>
             <button
@@ -239,6 +191,53 @@ export default function InputBar({
             rows={1}
             className="flex-1 bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40"
           />
+
+          {/* AI selector — moved to the right of the textarea (Perplexity-style placement).
+              Dropdown anchors to right-0 so it opens up-and-leftward instead of overflowing. */}
+          <div className="relative shrink-0" ref={dropdownRef}>
+            <button
+              onClick={() => setDropdownOpen((v) => !v)}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-xs font-medium text-muted hover:text-white transition-colors disabled:opacity-50 py-1"
+            >
+              <span className="text-white">{currentAI.label}</span>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="currentColor"
+                className={`transition-transform ${dropdownOpen ? 'rotate-180' : ''}`}
+              >
+                <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+              </svg>
+            </button>
+
+            {dropdownOpen && (
+              <div className="absolute bottom-full mb-2 right-0 bg-surface border border-border rounded-xl py-1 shadow-xl z-50 min-w-[140px]">
+                {AI_MODELS.map((model) => (
+                  // comingSoon providers (e.g. Perplexity) are shown disabled with a label and
+                  // can't be selected — clicking does nothing.
+                  <button
+                    key={model.id}
+                    onClick={() => { if (!model.comingSoon) handleAISelect(model.id); }}
+                    disabled={model.comingSoon}
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between gap-2 ${
+                      model.comingSoon
+                        ? 'text-muted/50 cursor-not-allowed'
+                        : model.id === selectedAI
+                        ? 'text-white bg-white/5'
+                        : 'text-muted hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>{model.label}</span>
+                    {model.comingSoon && (
+                      <span className="text-[10px] uppercase tracking-wide text-muted/50">Coming soon</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Send button */}
           <button
