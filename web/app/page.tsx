@@ -291,6 +291,7 @@ export default function Home() {
           loading={loading}
           transferring={transferring}
           timeoutMs={timeoutMs}
+          chatName={chats.find((c) => c.id === currentChatId)?.name}
           onSendMessage={handleSendMessage}
           onSwitchAI={handleSwitchAI}
           onTimeoutChange={setTimeoutMs}

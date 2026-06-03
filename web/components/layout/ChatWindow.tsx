@@ -10,6 +10,8 @@ import ActiveChatState from '@/components/chat/ActiveChatState';
 // works without a Supabase session (chats just aren't persisted; saveChat() in page.tsx no-ops
 // when user is null). Re-enable the auth block by reintroducing the `if (!user)` branch when
 // Supabase email rate limits / login flow is sorted.
+// chatName is threaded down to ActiveChatState → TopBar so the header shows the current chat's
+// name (or "New chat" placeholder until the first message names the chat).
 interface Props {
   user: User | null;
   extensionActive: boolean;
@@ -18,6 +20,7 @@ interface Props {
   loading: boolean;
   transferring: boolean;
   timeoutMs: number;
+  chatName?: string;
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
   onTimeoutChange: (ms: number) => void;
@@ -32,24 +35,39 @@ export default function ChatWindow({
   loading,
   transferring,
   timeoutMs,
+  chatName,
   onSendMessage,
   onSwitchAI,
   onTimeoutChange,
 }: Props) {
   // Extension-not-installed state: the chat UI is fully blocked because every message has to be
-  // delivered through the extension's content scripts. Without it there is nothing to send to.
+  // delivered through the extension's content scripts. The composer placeholder below mirrors
+  // the Spectrum surface so it still looks like the same app, just disabled.
   if (!extensionActive) {
     return (
       <div className="flex flex-col flex-1 h-full">
         <div className="flex-1 flex items-center justify-center px-6">
           <NoExtensionState />
         </div>
-        <div className="border-t border-border px-4 py-4">
-          <div className="max-w-3xl mx-auto">
-            <div className="flex items-center gap-3 bg-surface border border-border rounded-2xl px-4 py-3 opacity-40 cursor-not-allowed">
-              <span className="text-xs text-muted">ChatGPT</span>
-              <div className="w-px h-5 bg-border" />
-              <span className="flex-1 text-sm text-muted">Install extension to start chatting…</span>
+        <div style={{ padding: '10px 28px 22px' }}>
+          <div style={{ maxWidth: 720, margin: '0 auto' }}>
+            <div
+              className="flex items-center"
+              style={{
+                gap: 12,
+                background: 'var(--panel)',
+                border: '1px solid var(--line)',
+                borderRadius: 18,
+                padding: '14px 16px',
+                opacity: 0.4,
+                cursor: 'not-allowed',
+              }}
+            >
+              <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>ChatGPT</span>
+              <div style={{ width: 1, height: 20, background: 'var(--line)' }} />
+              <span style={{ flex: 1, fontSize: 14, color: 'var(--dim)' }}>
+                Install extension to start chatting…
+              </span>
             </div>
           </div>
         </div>
@@ -67,6 +85,7 @@ export default function ChatWindow({
         loading={loading}
         transferring={transferring}
         timeoutMs={timeoutMs}
+        chatName={chatName}
         onSendMessage={onSendMessage}
         onSwitchAI={onSwitchAI}
         onTimeoutChange={onTimeoutChange}

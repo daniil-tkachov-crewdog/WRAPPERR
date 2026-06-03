@@ -2,11 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Spectrum design tokens.
+   Neutral palette (--bg → --faint) replaces the old #111/#1a/#2a/#888 set. Anything that still
+   reads `bg-bg / bg-surface / bg-border / text-muted` resolves to these via the tailwind aliases
+   in tailwind.config.ts, so legacy screens (login, settings, NoExtension) inherit the new look
+   automatically without per-file edits.
+   Provider hues are oklch — abstract brand-adjacent, not official logos. Used by the tint()
+   helper in lib/constants.ts to produce translucent surfaces/borders/spines. */
 :root {
-  --bg: #111111;
-  --surface: #1a1a1a;
-  --border: #2a2a2a;
-  --muted: #888888;
+  --bg: #0b0c0e;
+  --rail: #0e0f12;
+  --panel: #15161a;
+  --raise: #1b1c21;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-soft: rgba(255, 255, 255, 0.05);
+  --text: #eef0f3;
+  --mid: #9aa0ab;
+  --dim: #646a76;
+  --faint: #444a55;
+
+  --p-chatgpt: oklch(0.74 0.12 165);
+  --p-claude: oklch(0.76 0.13 55);
+  --p-grok: oklch(0.86 0.02 260);
+  --p-gemini: oklch(0.70 0.13 255);
+  --p-deepseek: oklch(0.68 0.15 288);
+  --p-perplexity: oklch(0.74 0.09 200);
 }
 
 * {
@@ -19,7 +39,7 @@ html,
 body {
   height: 100%;
   background-color: var(--bg);
-  color: #ffffff;
+  color: var(--text);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -33,12 +53,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3a;
+  background: rgba(255, 255, 255, 0.14);
 }
 
 ::selection {
@@ -61,13 +81,17 @@ textarea {
 
 /* Markdown styling for assistant messages. Scoped to .wrapperr-md so it never affects user
    messages or other UI. Tailwind base resets all margins to 0, so we reintroduce the spacing
-   we want for prose. Keep this minimal — the dark theme handles colors via inherited white. */
+   we want for prose. Colors are routed through the Spectrum neutrals (--text / --mid) so the
+   provider-spine layout reads as a single typographic block, not a bubble.
+   The .wrapperr-md--bullet-* helper classes are added by MessageBubble at render time to colour
+   list bullets with the active provider hue — done via a custom ::marker rule per provider. */
 .wrapperr-md > * + * { margin-top: 0.75em; }
-.wrapperr-md h1 { font-size: 1.5em; font-weight: 700; margin-top: 1.25em; }
-.wrapperr-md h2 { font-size: 1.3em; font-weight: 700; margin-top: 1.1em; }
-.wrapperr-md h3 { font-size: 1.15em; font-weight: 600; margin-top: 1em; }
-.wrapperr-md h4, .wrapperr-md h5, .wrapperr-md h6 { font-weight: 600; margin-top: 1em; }
-.wrapperr-md strong { font-weight: 700; }
+.wrapperr-md { color: var(--mid); }
+.wrapperr-md h1 { font-size: 1.5em; font-weight: 700; margin-top: 1.25em; color: var(--text); }
+.wrapperr-md h2 { font-size: 1.3em; font-weight: 700; margin-top: 1.1em; color: var(--text); }
+.wrapperr-md h3 { font-size: 1.15em; font-weight: 600; margin-top: 1em; color: var(--text); }
+.wrapperr-md h4, .wrapperr-md h5, .wrapperr-md h6 { font-weight: 600; margin-top: 1em; color: var(--text); }
+.wrapperr-md strong { font-weight: 700; color: var(--text); }
 .wrapperr-md em { font-style: italic; }
 .wrapperr-md del { text-decoration: line-through; opacity: 0.7; }
 .wrapperr-md ul { list-style: disc; padding-left: 1.5em; }
@@ -75,22 +99,30 @@ textarea {
 .wrapperr-md li > ul, .wrapperr-md li > ol { margin-top: 0.25em; }
 .wrapperr-md li { margin-top: 0.25em; }
 .wrapperr-md li > input[type="checkbox"] { margin-right: 0.4em; }
+/* Provider-hued list bullets — applied via class on the .wrapperr-md root from MessageBubble. */
+.wrapperr-md--bullet-chatgpt ul li::marker { color: var(--p-chatgpt); }
+.wrapperr-md--bullet-claude ul li::marker { color: var(--p-claude); }
+.wrapperr-md--bullet-grok ul li::marker { color: var(--p-grok); }
+.wrapperr-md--bullet-gemini ul li::marker { color: var(--p-gemini); }
+.wrapperr-md--bullet-deepseek ul li::marker { color: var(--p-deepseek); }
+.wrapperr-md--bullet-perplexity ul li::marker { color: var(--p-perplexity); }
 .wrapperr-md blockquote {
-  border-left: 3px solid #444;
+  border-left: 3px solid var(--line);
   padding-left: 0.9em;
-  color: #bbb;
+  color: var(--dim);
   font-style: italic;
 }
 .wrapperr-md code {
-  background: #2a2a2a;
+  background: var(--panel);
   padding: 0.15em 0.35em;
   border-radius: 3px;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9em;
+  color: var(--text);
 }
 .wrapperr-md pre {
-  background: #0e0e0e;
-  border: 1px solid #2a2a2a;
+  background: var(--panel);
+  border: 1px solid var(--line);
   padding: 0.85em 1em;
   border-radius: 6px;
   overflow-x: auto;
@@ -104,7 +136,7 @@ textarea {
 }
 .wrapperr-md hr {
   border: 0;
-  border-top: 1px solid #2a2a2a;
+  border-top: 1px solid var(--line);
   margin: 1em 0;
 }
 .wrapperr-md table {
@@ -114,12 +146,12 @@ textarea {
   overflow-x: auto;
 }
 .wrapperr-md th, .wrapperr-md td {
-  border: 1px solid #2a2a2a;
+  border: 1px solid var(--line);
   padding: 0.4em 0.7em;
   text-align: left;
 }
-.wrapperr-md th { background: #1d1d1d; font-weight: 600; }
-.wrapperr-md p { line-height: 1.55; }
+.wrapperr-md th { background: var(--raise); font-weight: 600; color: var(--text); }
+.wrapperr-md p { line-height: 1.66; }
 .wrapperr-md img { max-width: 100%; border-radius: 6px; }
 /* KaTeX overrides — pin sane font color on dark theme. */
 .wrapperr-md .katex { color: inherit; }

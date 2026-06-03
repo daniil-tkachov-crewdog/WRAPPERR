@@ -2,56 +2,72 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '@/lib/types';
-import { AI_MODELS } from '@/lib/constants';
+import { AI_MODELS, hueOf, tint } from '@/lib/constants';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import ProviderMark from './ProviderMark';
 
 interface Props {
   message: Message;
   onAskAbout?: (text: string) => void;
 }
 
-// MessageBubble: renders chat messages and exposes two interactions.
-//   - Copy: small icon button under every bubble copies the raw message content.
-//   - Ask about it: only on assistant bubbles. When the user highlights text inside the bubble,
-//     a floating button appears near the selection. Clicking it sends the highlighted text up
-//     via onAskAbout; the parent then prepends it as a Markdown blockquote to the next message
-//     so the AI sees the quoted context. Position is recomputed on selectionchange; the popover
-//     hides on scroll/click-elsewhere because re-positioning during scroll would require a
-//     popper library we don't need.
-// User messages: plain text. Assistant messages: Markdown with GFM + KaTeX, normalized
-// provider-side so every AI's styled output renders consistently.
+// MessageBubble — Spectrum redesign.
+// User messages: off-white #f3f4f6 bubble with a tail-bottom-right radius.
+// Assistant messages: no bubble — instead, a 2px provider-hued spine on the left and a chip
+// above the body (24×24 hued tile + label + mono `<model-id>` metadata). Body keeps the
+// existing react-markdown + remark-gfm + KaTeX pipeline. List bullets are tinted to the
+// provider hue via the .wrapperr-md--bullet-<id> class on the wrapper.
+//
+// Interactions are unchanged:
+//   - Copy: small button under every bubble copies the raw message content.
+//   - Ask about it: assistant-only. When the user highlights text inside the bubble, a floating
+//     button appears near the selection. Clicking it sends the highlighted text up via onAskAbout;
+//     the parent then prepends it as a Markdown blockquote to the next message so the AI sees the
+//     quoted context. Position is recomputed on selectionchange; we hide on click-elsewhere since
+//     repositioning during scroll would require a popper library we don't need.
+// We don't currently track real latency, so the chip's mono metadata shows only the model id
+// (e.g. `claude-3.7`). When latency tracking lands, append it like `claude-3.7 · 0.9s`.
+const MODEL_ID_LABELS: Record<string, string> = {
+  chatgpt: 'gpt-4o',
+  claude: 'claude-3.7',
+  grok: 'grok-2',
+  gemini: 'gemini-1.5',
+  deepseek: 'deepseek-v3',
+  perplexity: 'pplx-online',
+};
+
 export default function MessageBubble({ message, onAskAbout }: Props) {
   const isUser = message.role === 'user';
-  const aiLabel = message.aiModel
-    ? AI_MODELS.find((m) => m.id === message.aiModel)?.label
-    : undefined;
+  const aiModel = message.aiModel;
+  const aiLabel = aiModel ? AI_MODELS.find((m) => m.id === aiModel)?.label : undefined;
+  const aiHue = aiModel ? hueOf(aiModel) : undefined;
+  const modelMeta = aiModel ? MODEL_ID_LABELS[aiModel] : undefined;
   const bubbleRef = useRef<HTMLDivElement>(null);
   const [selectionInfo, setSelectionInfo] =
     useState<{ text: string; top: number; left: number } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Show: fires when the user releases the mouse inside this bubble after a drag-select. We
-  // know the selection is within the bubble because mouseup happened here, so we skip the
-  // fragile commonAncestorContainer.contains() check that ReactMarkdown's nested DOM was
-  // tripping up. Hide: selectionchange clears the chip when the user clicks elsewhere and
-  // the selection collapses. We do NOT hide on scroll — the user may scroll to give the
-  // button room or just to inspect; the button gets repositioned via getBoundingClientRect
-  // each mouseup, and once they actually click outside the selection collapses anyway.
+  // Show: fires on mouseup inside this bubble after a drag-select. We know the selection is
+  // inside the bubble because mouseup happened here, so we skip the fragile
+  // commonAncestorContainer.contains() check that ReactMarkdown's nested DOM trips up.
   function showFromCurrentSelection() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     const text = sel.toString().trim();
     if (!text) return;
     const rect = sel.getRangeAt(0).getBoundingClientRect();
-    // Default above the selection; flip below if there isn't room near the viewport top.
     const top = rect.top > 50 ? rect.top - 38 : rect.bottom + 8;
     setSelectionInfo({ text, top, left: rect.left + rect.width / 2 });
   }
 
+  // Hide: selectionchange clears the chip when the user clicks elsewhere and the selection
+  // collapses. We do NOT hide on scroll — the user may scroll to give the button room; the
+  // button is repositioned via getBoundingClientRect on each mouseup, and once they click
+  // outside the selection collapses anyway.
   useEffect(() => {
     if (isUser || !onAskAbout) return;
     function handleSelectionChange() {
@@ -76,53 +92,121 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
     setSelectionInfo(null);
   }
 
+  // ── User branch ───────────────────────────────────────────────────────────
+  // Off-white bubble, dark text, right-aligned, bottom-right tail. Copy button sits beneath.
+  if (isUser) {
+    return (
+      <div className="flex justify-end mb-4">
+        <div className="flex flex-col items-end" style={{ maxWidth: '78%' }}>
+          <div
+            style={{
+              background: '#f3f4f6',
+              color: '#111',
+              borderRadius: '16px 16px 5px 16px',
+              padding: '12px 16px',
+              fontSize: 14.5,
+              lineHeight: 1.55,
+            }}
+          >
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
+          <div className="flex items-center gap-1 mt-1 px-1">
+            <button
+              onClick={handleCopy}
+              title={copied ? 'Copied!' : 'Copy message'}
+              className="transition-colors p-1 rounded"
+              style={{ color: 'var(--dim)' }}
+            >
+              {copied ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Assistant branch ─────────────────────────────────────────────────────
+  // No bubble. Provider-hued spine on the left, chip above the body, markdown body inside.
+  // The selection-popover is rendered after, fixed-positioned at the selection rect.
+  const bulletClass = aiModel ? `wrapperr-md--bullet-${aiModel}` : '';
+
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
-      <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[75%]`}>
+    <div className="flex mb-6">
+      <div
+        ref={bubbleRef}
+        onMouseUp={onAskAbout ? showFromCurrentSelection : undefined}
+        style={{
+          paddingLeft: 18,
+          borderLeft: `2px solid ${aiHue ? tint(aiHue, 0.5) : 'var(--line)'}`,
+          maxWidth: '100%',
+          width: '100%',
+        }}
+      >
+        {aiModel && aiLabel && (
+          <div className="flex items-center" style={{ gap: 9, marginBottom: 12 }}>
+            <span
+              style={{
+                width: 24,
+                height: 24,
+                borderRadius: 7,
+                background: aiHue ? tint(aiHue, 0.14) : 'transparent',
+                border: `1px solid ${aiHue ? tint(aiHue, 0.3) : 'var(--line)'}`,
+                display: 'grid',
+                placeItems: 'center',
+                color: aiHue,
+              }}
+            >
+              <ProviderMark id={aiModel} size={14} />
+            </span>
+            <span style={{ fontSize: 12.5, fontWeight: 580, color: 'var(--text)' }}>{aiLabel}</span>
+            {modelMeta && (
+              <span className="font-mono" style={{ fontSize: 10.5, color: 'var(--dim)' }}>
+                {modelMeta}
+              </span>
+            )}
+          </div>
+        )}
+
         <div
-          ref={bubbleRef}
-          onMouseUp={!isUser && onAskAbout ? showFromCurrentSelection : undefined}
-          className={`${
-            isUser
-              ? 'bg-white text-black rounded-2xl rounded-tr-sm px-4 py-3'
-              : 'bg-surface border border-border text-white rounded-2xl rounded-tl-sm px-4 py-3'
-          }`}
+          className={`wrapperr-md ${bulletClass}`}
+          style={{ fontSize: 14.5, lineHeight: 1.66 }}
         >
-          {!isUser && aiLabel && (
-            <p className="text-xs text-muted mb-1.5 font-medium">{aiLabel}</p>
-          )}
-          {isUser ? (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-          ) : (
-            <div className="text-sm leading-relaxed wrapperr-md">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-                components={{
-                  a: ({ href, children }) => (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 underline hover:text-blue-300"
-                    >
-                      {children}
-                    </a>
-                  ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
-            </div>
-          )}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+            components={{
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: aiHue ?? 'var(--text)', textDecoration: 'underline' }}
+                >
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
         </div>
 
-        {/* Action row: copy button (always) sits under each bubble. */}
-        <div className="flex items-center gap-1 mt-1 px-1">
+        {/* Action row: copy button. */}
+        <div className="flex items-center gap-1 mt-2">
           <button
             onClick={handleCopy}
             title={copied ? 'Copied!' : 'Copy message'}
-            className="text-muted hover:text-white transition-colors p-1 rounded"
+            className="transition-colors p-1 rounded"
+            style={{ color: 'var(--dim)' }}
           >
             {copied ? (
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -138,11 +222,12 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
         </div>
       </div>
 
-      {/* Floating "Ask about it" popover, only when text is selected inside an assistant bubble.
-          Fixed-positioned at the top of the selection rect; translated by -50% so it centers. */}
+      {/* Floating "Ask about it" popover. Fixed-positioned at the top of the selection rect;
+          translated -50% to center horizontally. onMouseDown preventDefault preserves the
+          selection while the click fires. */}
       {selectionInfo && (
         <button
-          onMouseDown={(e) => e.preventDefault() /* don't drop the selection */}
+          onMouseDown={(e) => e.preventDefault()}
           onClick={handleAskAbout}
           style={{
             position: 'fixed',
