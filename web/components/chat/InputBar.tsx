@@ -199,7 +199,10 @@ export default function InputBar({
           </div>
         )}
 
-        <div className="flex items-end gap-3 bg-surface border border-border rounded-2xl px-4 py-3">
+        {/* Two-row chat bar: textarea takes its own row up top (more room to type), action
+            buttons split into left (+, Features, Timeout) and right (Model, Send) clusters
+            below. */}
+        <div className="flex flex-col gap-2 bg-surface border border-border rounded-2xl px-4 pt-3 pb-2">
           {/* Hidden file input. The "+" button triggers it via .click(). Placeholder — no upload. */}
           <input
             ref={fileInputRef}
@@ -207,6 +210,23 @@ export default function InputBar({
             className="hidden"
             onChange={handleFileChange}
           />
+
+          {/* Top row: textarea spans the full width. */}
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={disabled ? '' : 'Message…'}
+            disabled={disabled || loading}
+            rows={1}
+            className="w-full bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40 resize-none"
+          />
+
+          {/* Bottom row: left cluster (+, Features, Timeout) and right cluster (Model, Send),
+              pushed to opposite edges via justify-between. */}
+          <div className="flex items-end justify-between gap-2">
+            <div className="flex items-end gap-2 min-w-0">
 
           {/* "+" button: opens the native file picker. Pure placeholder; file is never sent. */}
           <button
@@ -323,17 +343,10 @@ export default function InputBar({
 
           <div className="w-px h-5 bg-border shrink-0" />
 
-          {/* Textarea */}
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={disabled ? '' : 'Message…'}
-            disabled={disabled || loading}
-            rows={1}
-            className="flex-1 bg-transparent text-white text-sm placeholder-muted outline-none leading-relaxed min-h-[24px] max-h-[200px] disabled:opacity-40"
-          />
+            </div>
+
+            {/* Right cluster: Model selector + Send button. */}
+            <div className="flex items-end gap-2 shrink-0">
 
           {/* AI selector — moved to the right of the textarea (Perplexity-style placement).
               Dropdown anchors to right-0 so it opens up-and-leftward instead of overflowing. */}
@@ -396,6 +409,8 @@ export default function InputBar({
               </svg>
             )}
           </button>
+            </div>
+          </div>
         </div>
 
         <p className="text-center text-muted text-xs mt-2">
