@@ -19,6 +19,15 @@ interface Props {
   // (X button on the chip) or automatically after send.
   quote?: string | null;
   onClearQuote?: () => void;
+  // Compare AI — when compareMode is true: the Compare feature pill becomes active, the model
+  // selector dropdown is replaced with a "Compare" badge (since switching the single AI doesn't
+  // apply), and the helper line reflects fan-out. compareCount is the size of the chosen set.
+  // onToggleCompare flips the parent's compareMode (the only way to switch off besides new chat
+  // / refresh, per spec).
+  compareMode?: boolean;
+  compareCount?: number;
+  compareLocked?: boolean;
+  onToggleCompare?: () => void;
 }
 
 const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
@@ -49,6 +58,10 @@ export default function InputBar({
   loading = false,
   quote = null,
   onClearQuote,
+  compareMode = false,
+  compareCount = 0,
+  compareLocked = false,
+  onToggleCompare,
 }: Props) {
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -69,7 +82,12 @@ export default function InputBar({
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
   const currentTimeoutLabel =
     TIMEOUT_OPTIONS.find((o) => o.ms === timeoutMs)?.label ?? `${Math.round(timeoutMs / 1000)}s`;
-  const currentFeature = FEATURE_OPTIONS.find((f) => f.id === selectedFeature) ?? null;
+  // currentFeature: which pill shows as the "active" label on the trigger button. Compare
+  // takes precedence over the placeholder selectedFeature when compareMode is true — that way
+  // the trigger reflects the real feature state, not the cosmetic one.
+  const currentFeature = compareMode
+    ? FEATURE_OPTIONS.find((f) => f.id === 'compare') ?? null
+    : FEATURE_OPTIONS.find((f) => f.id === selectedFeature) ?? null;
   // Active hue drives the composer border/focus ring, model chip, send button, helper line.
   const hue = hueOf(selectedAI);
 
@@ -134,8 +152,15 @@ export default function InputBar({
   }
 
   // handleFeatureSelect: pick a placeholder feature pill, or deselect it if the same option is
-  // clicked again. Only one feature can be active at a time. No effect on the send pipeline.
+  // clicked again. Only one feature can be active at a time. The Compare entry is special: it
+  // bubbles up to onToggleCompare in the parent (real feature, not a placeholder); the other
+  // two are still cosmetic.
   function handleFeatureSelect(id: FeatureId) {
+    if (id === 'compare') {
+      onToggleCompare?.();
+      setFeatureOpen(false);
+      return;
+    }
     setSelectedFeature((cur) => (cur === id ? null : id));
     setFeatureOpen(false);
   }
@@ -323,7 +348,9 @@ export default function InputBar({
                   }}
                 >
                   {FEATURE_OPTIONS.map((opt) => {
-                    const active = opt.id === selectedFeature;
+                    // Compare's active state is the parent compareMode, not local selectedFeature.
+                    // That way clicking it twice (on → off) reflects the real feature state.
+                    const active = opt.id === 'compare' ? compareMode : opt.id === selectedFeature;
                     return (
                       <button
                         key={opt.id}
@@ -420,7 +447,38 @@ export default function InputBar({
 
             <div style={{ flex: 1 }} />
 
-            {/* Model selector chip — provider mark + label + chevron, tinted with the active hue. */}
+            {/* Model selector chip — provider mark + label + chevron, tinted with the active
+                hue. Replaced by a static "Compare" badge while compareMode is on, since
+                switching the single AI is meaningless (and forbidden by spec) in that mode. */}
+            {compareMode ? (
+              <div
+                className="flex items-center shrink-0"
+                title={
+                  compareLocked
+                    ? `Compare AI · locked to ${compareCount} models`
+                    : 'Compare AI · pick at least 2 above'
+                }
+                style={{
+                  gap: 7,
+                  padding: '6px 10px',
+                  borderRadius: 10,
+                  border: '1px solid var(--line)',
+                  background: 'var(--raise)',
+                  color: 'var(--text)',
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                  <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                  <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                </svg>
+                <span style={{ fontSize: 12.5, fontWeight: 540 }}>Compare</span>
+                <span className="font-mono" style={{ fontSize: 10.5, color: 'var(--dim)' }}>
+                  {compareCount}/6
+                </span>
+              </div>
+            ) : (
             <div className="relative shrink-0" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((v) => !v)}
@@ -514,6 +572,7 @@ export default function InputBar({
                 </div>
               )}
             </div>
+            )}
 
             {/* Send button — 36×36, provider hue background, dark glyph, hue-coloured glow. */}
             <button
@@ -555,14 +614,27 @@ export default function InputBar({
           </div>
         </div>
 
-        {/* Helper line — mono, with the active provider label tinted in its hue. */}
+        {/* Helper line — mono, with the active provider label tinted in its hue. In compareMode
+            the wording changes to reflect fan-out and the locked/unlocked state. */}
         <div
           className="font-mono text-center"
           style={{ fontSize: 11, color: 'var(--faint)', marginTop: 11 }}
         >
-          replying with{' '}
-          <span style={{ color: hue }}>{currentAI.label}</span>{' '}
-          · switch model anytime — the thread relays automatically
+          {compareMode ? (
+            compareLocked ? (
+              <>fanning out to <span style={{ color: 'var(--text)' }}>{compareCount}</span> AIs · click Compare again to switch off</>
+            ) : compareCount >= 2 ? (
+              <>ready · message will fan out to <span style={{ color: 'var(--text)' }}>{compareCount}</span> AIs in parallel</>
+            ) : (
+              <>pick at least 2 AIs above to enable sending</>
+            )
+          ) : (
+            <>
+              replying with{' '}
+              <span style={{ color: hue }}>{currentAI.label}</span>{' '}
+              · switch model anytime — the thread relays automatically
+            </>
+          )}
         </div>
       </div>
     </div>

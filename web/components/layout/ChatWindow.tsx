@@ -24,6 +24,14 @@ interface Props {
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
   onTimeoutChange: (ms: number) => void;
+  // Compare AI — see web/app/page.tsx for the state lifecycle. compareMode toggles the feature;
+  // compareAIs is the editable set (frozen once compareLocked flips on first send).
+  compareMode: boolean;
+  compareAIs: AIModel[];
+  compareLocked: boolean;
+  onToggleCompare: () => void;
+  onToggleCompareAI: (ai: AIModel) => void;
+  onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
 }
 
 export default function ChatWindow({
@@ -39,6 +47,12 @@ export default function ChatWindow({
   onSendMessage,
   onSwitchAI,
   onTimeoutChange,
+  compareMode,
+  compareAIs,
+  compareLocked,
+  onToggleCompare,
+  onToggleCompareAI,
+  onRetryCompareSlide,
 }: Props) {
   // Extension-not-installed state: the chat UI is fully blocked because every message has to be
   // delivered through the extension's content scripts. The composer placeholder below mirrors
@@ -89,6 +103,12 @@ export default function ChatWindow({
         onSendMessage={onSendMessage}
         onSwitchAI={onSwitchAI}
         onTimeoutChange={onTimeoutChange}
+        compareMode={compareMode}
+        compareAIs={compareAIs}
+        compareLocked={compareLocked}
+        onToggleCompare={onToggleCompare}
+        onToggleCompareAI={onToggleCompareAI}
+        onRetryCompareSlide={onRetryCompareSlide}
       />
     </div>
   );

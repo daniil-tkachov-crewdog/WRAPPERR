@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { User } from '@supabase/supabase-js';
-import type { Message, AIModel, ChatSummary, Profile } from '@/lib/types';
+import type { Message, AIModel, ChatSummary, Profile, CompareResponse } from '@/lib/types';
 import { AI_MODELS, MAX_CHATS, SUMMARY_PROMPT } from '@/lib/constants';
 import { isExtensionActive, sendMessageToAI } from '@/lib/extension';
 import { createClient } from '@/lib/supabase/client';
@@ -32,6 +32,18 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [timeoutMs, setTimeoutMs] = useState(60000);
+
+  // ── Compare AI state ─────────────────────────────────────────────────────
+  // compareMode: master toggle for the feature. Off by default. Turning it on opens an in-thread
+  // selector card; turning it off (re-clicking the pill / new chat / refresh) clears the
+  // selection and lock but leaves any already-rendered compare messages in the thread.
+  // compareAIs: chosen set, editable only while compareLocked === false (i.e. before first send).
+  // compareLocked: flips to true on first successful send so the selector hides and follow-ups
+  // keep fanning out to the same set, preserving per-tab context across the conversation.
+  // These are NOT persisted to Supabase right now — the feature is fully in-memory.
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareAIs, setCompareAIs] = useState<AIModel[]>([]);
+  const [compareLocked, setCompareLocked] = useState(false);
 
   // Auth init
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,6 +131,38 @@ export default function Home() {
     setSelectedAI(profile?.default_ai ?? 'chatgpt');
     setLoading(false);
     setTransferring(false);
+    // Compare must reset on every new chat — that's one of the documented "switch off" paths
+    // (along with re-clicking the pill and full page refresh).
+    setCompareMode(false);
+    setCompareAIs([]);
+    setCompareLocked(false);
+  }
+
+  // toggleCompare: invoked from the Compare pill in InputBar. Flipping ON clears any stale
+  // selection so the picker starts empty. Flipping OFF wipes selection and lock; already-rendered
+  // compare messages stay visible in the thread (read as historical), and the single-AI flow
+  // resumes immediately. While compareMode is true, handleSwitchAI is a hard no-op (see below)
+  // so there's no chance of cross-contamination with the single-AI path.
+  function toggleCompare() {
+    setCompareMode((prev) => {
+      const next = !prev;
+      if (next) {
+        setCompareAIs([]);
+        setCompareLocked(false);
+      } else {
+        setCompareAIs([]);
+        setCompareLocked(false);
+      }
+      return next;
+    });
+  }
+
+  // toggleCompareAI: add/remove an AI from the picker. Only meaningful while !compareLocked;
+  // once locked the selector card is hidden so this isn't called.
+  function toggleCompareAI(ai: AIModel) {
+    setCompareAIs((prev) =>
+      prev.includes(ai) ? prev.filter((x) => x !== ai) : [...prev, ai]
+    );
   }
 
   // saveChat: upserts the chat row in Supabase, then refreshes the sidebar list.
@@ -152,8 +196,139 @@ export default function Home() {
     await loadChats(user.id);
   }
 
+  // runCompareTurn: parallel fan-out to the selected AI set. Pushes the user message and a
+  // single compare message (responses all 'pending'), then fires sendMessageToAI() per AI
+  // concurrently, settling each slot independently via Promise.allSettled. Failed sends become
+  // status: 'error' slides; they do NOT poison the other slots. After this resolves, compareLocked
+  // is true so follow-ups reuse the same set. Intentionally never calls saveChat() — Compare is
+  // memory-only for now (Supabase schema has a single ai_model per chat).
+  async function runCompareTurn(text: string, ais: AIModel[]) {
+    const userMessage: Message = {
+      id: generateId(),
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    };
+    const compareId = generateId();
+    const initial: CompareResponse[] = ais.map((ai) => ({
+      ai,
+      content: '',
+      status: 'pending',
+    }));
+    const compareMessage: Message = {
+      id: compareId,
+      role: 'compare',
+      content: '',
+      timestamp: Date.now(),
+      responses: initial,
+    };
+    setMessages((prev) => [...prev, userMessage, compareMessage]);
+    setLoading(true);
+    setCompareLocked(true);
+
+    await Promise.allSettled(
+      ais.map(async (ai) => {
+        try {
+          const resp = await sendMessageToAI(ai, text, timeoutMs);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === compareId && m.responses
+                ? {
+                    ...m,
+                    responses: m.responses.map((r) =>
+                      r.ai === ai ? { ...r, content: resp, status: 'done' } : r
+                    ),
+                  }
+                : m
+            )
+          );
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === compareId && m.responses
+                ? {
+                    ...m,
+                    responses: m.responses.map((r) =>
+                      r.ai === ai ? { ...r, status: 'error', error: detail } : r
+                    ),
+                  }
+                : m
+            )
+          );
+        }
+      })
+    );
+
+    setLoading(false);
+  }
+
+  // retryCompareSlide: re-fires sendMessageToAI for one failed slide inside an existing compare
+  // message. Sets it back to 'pending', then on resolve/reject swaps to 'done' or 'error' again.
+  // The original user prompt is reused via the user message immediately preceding the compare
+  // message in the thread.
+  async function retryCompareSlide(compareId: string, ai: AIModel) {
+    const compareIdx = messages.findIndex((m) => m.id === compareId);
+    if (compareIdx <= 0) return;
+    const prev = messages[compareIdx - 1];
+    if (prev.role !== 'user') return;
+    const prompt = prev.content;
+
+    setMessages((cur) =>
+      cur.map((m) =>
+        m.id === compareId && m.responses
+          ? {
+              ...m,
+              responses: m.responses.map((r) =>
+                r.ai === ai ? { ...r, status: 'pending', error: undefined } : r
+              ),
+            }
+          : m
+      )
+    );
+
+    try {
+      const resp = await sendMessageToAI(ai, prompt, timeoutMs);
+      setMessages((cur) =>
+        cur.map((m) =>
+          m.id === compareId && m.responses
+            ? {
+                ...m,
+                responses: m.responses.map((r) =>
+                  r.ai === ai ? { ...r, content: resp, status: 'done' } : r
+                ),
+              }
+            : m
+        )
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      setMessages((cur) =>
+        cur.map((m) =>
+          m.id === compareId && m.responses
+            ? {
+                ...m,
+                responses: m.responses.map((r) =>
+                  r.ai === ai ? { ...r, status: 'error', error: detail } : r
+                ),
+              }
+            : m
+        )
+      );
+    }
+  }
+
   async function handleSendMessage(text: string) {
     if (!extensionActive) return;
+
+    // Compare branch — completely isolated from the single-AI flow. Requires ≥2 AIs in the
+    // selected set; otherwise the InputBar's send is disabled so we shouldn't get here, but
+    // we guard defensively.
+    if (compareMode) {
+      if (compareAIs.length < 2) return;
+      await runCompareTurn(text, compareAIs);
+      return;
+    }
 
     const userMessage: Message = {
       id: generateId(),
@@ -222,6 +397,10 @@ export default function Home() {
   }
 
   async function handleSwitchAI(newAI: AIModel) {
+    // Defensive: while Compare is on the UI hides the model selector, but if any code path
+    // tries to switch the active single-AI we silently no-op. Compare must never trigger the
+    // summary-relay flow.
+    if (compareMode) return;
     if (newAI === selectedAI) return;
 
     // No messages yet — just switch
@@ -295,6 +474,12 @@ export default function Home() {
           onSendMessage={handleSendMessage}
           onSwitchAI={handleSwitchAI}
           onTimeoutChange={setTimeoutMs}
+          compareMode={compareMode}
+          compareAIs={compareAIs}
+          compareLocked={compareLocked}
+          onToggleCompare={toggleCompare}
+          onToggleCompareAI={toggleCompareAI}
+          onRetryCompareSlide={retryCompareSlide}
         />
       </main>
     </div>

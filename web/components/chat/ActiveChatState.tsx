@@ -6,6 +6,8 @@ import { hueOf, tint } from '@/lib/constants';
 import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
 import RelayCard from './RelayCard';
+import CompareCard from './CompareCard';
+import CompareSelectorCard from './CompareSelectorCard';
 import TopBar from '@/components/layout/TopBar';
 
 interface Props {
@@ -18,6 +20,15 @@ interface Props {
   onSendMessage: (text: string) => void;
   onSwitchAI: (ai: AIModel) => void;
   onTimeoutChange: (ms: number) => void;
+  // Compare AI props — see page.tsx for lifecycle. The selector card renders only while
+  // compareMode === true && !compareLocked (pre-first-send). After the first compare send the
+  // card is hidden and the locked set is reused for follow-ups.
+  compareMode: boolean;
+  compareAIs: AIModel[];
+  compareLocked: boolean;
+  onToggleCompare: () => void;
+  onToggleCompareAI: (ai: AIModel) => void;
+  onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
 }
 
 // ActiveChatState — the live chat view.
@@ -40,6 +51,12 @@ export default function ActiveChatState({
   onSendMessage,
   onSwitchAI,
   onTimeoutChange,
+  compareMode,
+  compareAIs,
+  compareLocked,
+  onToggleCompare,
+  onToggleCompareAI,
+  onRetryCompareSlide,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [quote, setQuote] = useState<string | null>(null);
@@ -69,8 +86,20 @@ export default function ActiveChatState({
           )}
 
           {messages.map((msg, idx) => {
+            // Compare branch — fully separate render path. No relay derivation, no bubble.
+            // The CompareCard owns its own slide state and selection UI.
+            if (msg.role === 'compare') {
+              return (
+                <div key={msg.id}>
+                  <CompareCard message={msg} onRetry={onRetryCompareSlide} />
+                </div>
+              );
+            }
+
             // Relay derivation — find the previous assistant message and compare its aiModel.
             // We walk backwards rather than tracking outside the map so the rule is local.
+            // Compare-role messages are skipped here so a Compare turn never triggers a relay
+            // card on the next single-AI reply.
             let relay: { from: AIModel; to: AIModel } | null = null;
             if (msg.role === 'assistant' && msg.aiModel) {
               for (let j = idx - 1; j >= 0; j--) {
@@ -91,6 +120,13 @@ export default function ActiveChatState({
               </div>
             );
           })}
+
+          {/* Compare selector — appears in-thread while Compare is on and not yet locked.
+              Sits where the next assistant message will appear, so picking AIs reads as
+              setting up the "panel" that will answer. Hidden after first Compare send. */}
+          {compareMode && !compareLocked && (
+            <CompareSelectorCard selected={compareAIs} onToggle={onToggleCompareAI} />
+          )}
 
           {/* Transferring indicator. Re-tinted to the to-provider (selectedAI) hue. */}
           {transferring && (
@@ -149,6 +185,13 @@ export default function ActiveChatState({
           loading={loading || transferring}
           quote={quote}
           onClearQuote={() => setQuote(null)}
+          compareMode={compareMode}
+          compareCount={compareAIs.length}
+          compareLocked={compareLocked}
+          onToggleCompare={onToggleCompare}
+          // Disable send while Compare is on but fewer than 2 AIs are picked. Once locked, the
+          // set can't drop below 2 so this naturally stops gating.
+          disabled={compareMode && !compareLocked && compareAIs.length < 2}
         />
       </div>
     </div>
