@@ -156,6 +156,31 @@ async function sendToAI(ai, message, requestId) {
   }
 }
 
+// rereadFromAI: ensures the AI's tab and content script are alive, then asks the content script
+// for the latest assistant message text via WRAPPERR_REREAD_LATEST. No injection, no polling —
+// the content script returns whatever the network buffer or DOM currently holds for the last
+// turn. Throws if the tab can't be reached. Used by the Compare carousel's per-slide refresh.
+async function rereadFromAI(ai) {
+  const tabId = await ensureTab(ai);
+  await injectContentScript(tabId, ai);
+
+  let resp;
+  try {
+    resp = await chrome.tabs.sendMessage(tabId, { type: 'WRAPPERR_REREAD_LATEST' });
+  } catch (err) {
+    const m = err?.message || '';
+    if (m.includes('Receiving end does not exist') || m.includes('No tab with id')) {
+      delete tabMap[ai];
+      await persistTabMap();
+    }
+    throw new Error(m || 'Failed to communicate with AI tab');
+  }
+
+  const text = (resp?.text || '').trim();
+  if (!text) throw new Error('No response found on tab');
+  return text;
+}
+
 async function pollForResponse(tabId, ai, sentAt, baseline) {
   const POLL_MS = 500;
   const STABLE_MS = 1500;
@@ -210,6 +235,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const { ai, message, requestId } = msg;
 
     sendToAI(ai, message, requestId)
+      .then((text) => {
+        sendToWrapperrTab({ type: 'WRAPPERR_RESPONSE', requestId, response: text });
+        sendResponse({ ok: true });
+      })
+      .catch((err) => {
+        sendToWrapperrTab({ type: 'WRAPPERR_RESPONSE', requestId, error: err.message });
+        sendResponse({ ok: false, error: err.message });
+      });
+
+    return true;
+  }
+
+  // WRAPPERR_REREAD: re-scrape the latest assistant message from an existing AI tab WITHOUT
+  // injecting a new prompt. The Compare carousel uses this when the original capture finished
+  // too early (e.g. only "Thinking…" or a partial reply made it through). We expect the tab to
+  // already hold the full completed response in DOM / network buffer, so we just read it again.
+  if (msg.type === 'WRAPPERR_REREAD') {
+    const { ai, requestId } = msg;
+
+    rereadFromAI(ai)
       .then((text) => {
         sendToWrapperrTab({ type: 'WRAPPERR_RESPONSE', requestId, response: text });
         sendResponse({ ok: true });

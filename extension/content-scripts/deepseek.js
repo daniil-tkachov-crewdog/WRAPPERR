@@ -68,9 +68,20 @@ function getCurrentState({ sentAt, baselineCount }) {
   return wrapperrBestText(messages[messages.length - 1]);
 }
 
+// readLatestResponse: see chatgpt.js. Network buffer preferred (DeepSeek's DOM strips markdown);
+// DOM fallback uses the same RESPONSE_SELECTOR as getBaseline.
+function readLatestResponse() {
+  const netText = readBestDeepSeekText(0);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const last = messages[messages.length - 1];
+  return last ? wrapperrBestText(last) : '';
+}
+
 // Message listener — guarded against double-installation if the script is re-injected.
 // Same shape as gemini.js / chatgpt.js / grok.js: WRAPPERR_INJECT_ONLY captures baseline + injects,
 // WRAPPERR_GET_STATE returns the current best response text for the SW's stability poller.
+// WRAPPERR_REREAD_LATEST returns the freshest last-assistant-message text without any inject.
 if (!window.__wrapperrAIListenerOn) {
   window.__wrapperrAIListenerOn = true;
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -88,6 +99,11 @@ if (!window.__wrapperrAIListenerOn) {
     }
     if (msg.type === 'WRAPPERR_GET_STATE') {
       try { sendResponse({ text: getCurrentState(msg) }); }
+      catch (err) { sendResponse({ text: '', error: err.message }); }
+      return false;
+    }
+    if (msg.type === 'WRAPPERR_REREAD_LATEST') {
+      try { sendResponse({ text: readLatestResponse() }); }
       catch (err) { sendResponse({ text: '', error: err.message }); }
       return false;
     }

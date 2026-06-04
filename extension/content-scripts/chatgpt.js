@@ -52,6 +52,19 @@ function getCurrentState({ sentAt, baselineCount }) {
   return wrapperrBestText(messages[messages.length - 1]);
 }
 
+// readLatestResponse: synchronous best-effort read of the LAST assistant message, used by the
+// Compare carousel's "recheck" button when the original capture finished early. No baseline,
+// no grace gate — we want whatever is in the buffer or DOM right now. Network buffer is
+// preferred because ChatGPT's DOM renders markdown as HTML (loses fence ticks, list symbols).
+// Passing sentAt=0 to the parser returns the longest captured stream regardless of age.
+function readLatestResponse() {
+  const netText = readBestChatGPTText(0);
+  if (netText) return netText;
+  const messages = document.querySelectorAll(RESPONSE_SELECTOR);
+  const last = messages[messages.length - 1];
+  return last ? wrapperrBestText(last) : '';
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -78,6 +91,11 @@ if (!window.__wrapperrAIListenerOn) {
       } catch (err) {
         sendResponse({ text: '', error: err.message });
       }
+      return false;
+    }
+    if (msg.type === 'WRAPPERR_REREAD_LATEST') {
+      try { sendResponse({ text: readLatestResponse() }); }
+      catch (err) { sendResponse({ text: '', error: err.message }); }
       return false;
     }
   });

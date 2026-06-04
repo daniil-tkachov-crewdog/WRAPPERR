@@ -38,3 +38,39 @@ export function sendMessageToAI(
     window.postMessage({ type: 'WRAPPERR_SEND', requestId, ai, message }, '*');
   });
 }
+
+// rereadFromAI: ask the extension to re-scrape the latest assistant message from an AI's tab
+// WITHOUT injecting a new prompt. Used by the Compare carousel's per-slide "recheck" button
+// for cases where the original capture finished too early (e.g. only "Thinking…" came through).
+// Shares the same WRAPPERR_RESPONSE return envelope as sendMessageToAI — the SW writes
+// response/error keyed by requestId — so the listener pattern below mirrors sendMessageToAI.
+export function rereadFromAI(
+  ai: AIModel,
+  timeoutMs: number = 30000
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const requestId = `rer_${++requestCounter}_${Date.now()}`;
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error('Recheck timed out'));
+    }, timeoutMs);
+
+    function handler(event: MessageEvent) {
+      if (
+        event.data?.type === 'WRAPPERR_RESPONSE' &&
+        event.data?.requestId === requestId
+      ) {
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+        } else {
+          resolve(event.data.response as string);
+        }
+      }
+    }
+
+    window.addEventListener('message', handler);
+    window.postMessage({ type: 'WRAPPERR_REREAD', requestId, ai }, '*');
+  });
+}

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { User } from '@supabase/supabase-js';
 import type { Message, AIModel, ChatSummary, Profile, CompareResponse } from '@/lib/types';
 import { AI_MODELS, MAX_CHATS, SUMMARY_PROMPT } from '@/lib/constants';
-import { isExtensionActive, sendMessageToAI } from '@/lib/extension';
+import { isExtensionActive, sendMessageToAI, rereadFromAI } from '@/lib/extension';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import ChatWindow from '@/components/layout/ChatWindow';
@@ -263,17 +263,13 @@ export default function Home() {
     setLoading(false);
   }
 
-  // retryCompareSlide: re-fires sendMessageToAI for one failed slide inside an existing compare
-  // message. Sets it back to 'pending', then on resolve/reject swaps to 'done' or 'error' again.
-  // The original user prompt is reused via the user message immediately preceding the compare
-  // message in the thread.
+  // retryCompareSlide: RE-READ the latest assistant message from the AI's existing tab — does
+  // NOT re-send the prompt. Solves the "Wrapperr captured only the start / 'Thinking…'" failure
+  // by re-scraping the tab where the AI has by now finished generating in full. The capture
+  // pipeline prefers the network buffer (markdown-fidelity) and falls back to DOM. Sets the
+  // slide back to 'pending' for visual feedback; on success swaps to 'done' with the freshly
+  // read content; on failure swaps to 'error' so the user can still try again.
   async function retryCompareSlide(compareId: string, ai: AIModel) {
-    const compareIdx = messages.findIndex((m) => m.id === compareId);
-    if (compareIdx <= 0) return;
-    const prev = messages[compareIdx - 1];
-    if (prev.role !== 'user') return;
-    const prompt = prev.content;
-
     setMessages((cur) =>
       cur.map((m) =>
         m.id === compareId && m.responses
@@ -288,7 +284,7 @@ export default function Home() {
     );
 
     try {
-      const resp = await sendMessageToAI(ai, prompt, timeoutMs);
+      const resp = await rereadFromAI(ai, timeoutMs);
       setMessages((cur) =>
         cur.map((m) =>
           m.id === compareId && m.responses

@@ -199,15 +199,17 @@ export default function CompareCard({ message, onRetry }: Props) {
                 </ReactMarkdown>
               </div>
 
-              {/* Retry button — small reload glyph under each finished response. The capture
+              {/* Recheck button — small reload glyph under each finished response. The capture
                   layer sometimes settles too early (e.g. catches only "Thinking…" or the first
-                  partial chunk before the stream completes). Clicking this re-fires
-                  sendMessageToAI for just this slide via the same retry path used by error
-                  slides, swapping the slot back to 'pending' until the new response arrives. */}
+                  partial chunk before the stream completes). Clicking this re-reads the LATEST
+                  assistant message directly from the AI's tab (no re-prompt — the AI has by now
+                  finished generating in full); swaps this slot to 'pending' until the fresh
+                  scrape returns. Different from the error-state Retry button, which uses the
+                  same handler — that one just hands off to the same recheck path. */}
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => onRetry(message.id, active.ai)}
-                  title="Try again — re-fetch this response"
+                  title="Re-check response from the AI's tab"
                   className="transition-colors p-1 rounded"
                   style={{ color: 'var(--dim)', background: 'transparent', border: 'none', cursor: 'pointer' }}
                 >
