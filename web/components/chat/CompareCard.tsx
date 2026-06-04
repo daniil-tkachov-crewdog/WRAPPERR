@@ -174,29 +174,50 @@ export default function CompareCard({ message, onRetry }: Props) {
           )}
 
           {active && active.status === 'done' && (
-            <div
-              className={`wrapperr-md wrapperr-md--bullet-${active.ai}`}
-              style={{ fontSize: 14.5, lineHeight: 1.66 }}
-            >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-                components={{
-                  a: ({ href, children }) => (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: activeHue, textDecoration: 'underline' }}
-                    >
-                      {children}
-                    </a>
-                  ),
-                }}
+            <>
+              <div
+                className={`wrapperr-md wrapperr-md--bullet-${active.ai}`}
+                style={{ fontSize: 14.5, lineHeight: 1.66 }}
               >
-                {active.content}
-              </ReactMarkdown>
-            </div>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                  components={{
+                    a: ({ href, children }) => (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: activeHue, textDecoration: 'underline' }}
+                      >
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {active.content}
+                </ReactMarkdown>
+              </div>
+
+              {/* Retry button — small reload glyph under each finished response. The capture
+                  layer sometimes settles too early (e.g. catches only "Thinking…" or the first
+                  partial chunk before the stream completes). Clicking this re-fires
+                  sendMessageToAI for just this slide via the same retry path used by error
+                  slides, swapping the slot back to 'pending' until the new response arrives. */}
+              <div className="flex items-center gap-1 mt-2">
+                <button
+                  onClick={() => onRetry(message.id, active.ai)}
+                  title="Try again — re-fetch this response"
+                  className="transition-colors p-1 rounded"
+                  style={{ color: 'var(--dim)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="23 4 23 10 17 10" />
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                  </svg>
+                </button>
+              </div>
+            </>
           )}
         </div>
 
