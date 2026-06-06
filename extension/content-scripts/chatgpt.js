@@ -1,3 +1,12 @@
+// Load guard: chrome.scripting.executeScript re-runs this file every time the SW calls
+// sendToAI. Top-level `const` (RESPONSE_SELECTOR, TOOL_LABEL, KNOWN_MODEL_LABELS) throws
+// SyntaxError on re-declaration — caught by the SW's try/catch, harmless functionally, but
+// noisy in the chatgpt.com console. Wrapping the whole file in a one-time guard makes the
+// second injection a clean no-op. The first injection's chrome.runtime listener stays live
+// and handles every subsequent send.
+if (!window.__wrapperrChatGPTLoaded) {
+  window.__wrapperrChatGPTLoaded = true;
+
 // injectMessage: locate ChatGPT's composer (textarea OR contenteditable) and submit.
 //
 // All actual typing logic lives in _wrapperr-input.js. The input module auto-selects the right
@@ -547,3 +556,5 @@ if (!window.__wrapperrAIListenerOn) {
     }
   });
 }
+
+} // end load guard
