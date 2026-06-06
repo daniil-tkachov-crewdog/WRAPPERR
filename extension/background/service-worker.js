@@ -123,7 +123,10 @@ async function injectContentScript(tabId, ai) {
   }
 }
 
-async function sendToAI(ai, message, requestId) {
+// sendToAI: ensures the AI's tab is alive, injects scripts, then asks the content script to
+// apply per-AI options (best-effort) and inject the prompt. `options` is optional and may be
+// undefined — the content script then just submits with the site's current state.
+async function sendToAI(ai, message, requestId, options) {
   try {
     const tabId = await ensureTab(ai);
     await injectContentScript(tabId, ai);
@@ -134,6 +137,7 @@ async function sendToAI(ai, message, requestId) {
         type: 'WRAPPERR_INJECT_ONLY',
         message,
         requestId,
+        options,
       });
     } catch (err) {
       const msg = err?.message || '';
@@ -232,9 +236,12 @@ async function pollForResponse(tabId, ai, sentAt, baseline) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'WRAPPERR_SEND') {
-    const { ai, message, requestId } = msg;
+    // options is optional — per-AI feature toggles ({ feature, intelligence, style }). When
+    // present it's threaded to the content script's applyOptions; when absent the content
+    // script submits with the site's current state. Adding a new slot here is additive.
+    const { ai, message, requestId, options } = msg;
 
-    sendToAI(ai, message, requestId)
+    sendToAI(ai, message, requestId, options)
       .then((text) => {
         sendToWrapperrTab({ type: 'WRAPPERR_RESPONSE', requestId, response: text });
         sendResponse({ ok: true });
