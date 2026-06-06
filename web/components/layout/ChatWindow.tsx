@@ -2,6 +2,7 @@
 
 import type { User } from '@supabase/supabase-js';
 import type { Message, AIModel } from '@/lib/types';
+import type { AIOptionsMap } from '@/lib/aiOptionsStorage';
 import NoExtensionState from '@/components/chat/NoExtensionState';
 import ActiveChatState from '@/components/chat/ActiveChatState';
 
@@ -32,6 +33,11 @@ interface Props {
   onToggleCompare: () => void;
   onToggleCompareAI: (ai: AIModel) => void;
   onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
+  // Per-AI pill selections (Tools / Model / Style). aiOptions is the whole map (so we can pass
+  // any AI's slot down to InputBar without re-keying), onAIOptionChange writes one slot at a
+  // time. See web/lib/aiFeatures.ts + web/lib/aiOptionsStorage.ts.
+  aiOptions: AIOptionsMap;
+  onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
 }
 
 export default function ChatWindow({
@@ -53,6 +59,8 @@ export default function ChatWindow({
   onToggleCompare,
   onToggleCompareAI,
   onRetryCompareSlide,
+  aiOptions,
+  onAIOptionChange,
 }: Props) {
   // Extension-not-installed state: the chat UI is fully blocked because every message has to be
   // delivered through the extension's content scripts. The composer placeholder below mirrors
@@ -109,6 +117,8 @@ export default function ChatWindow({
         onToggleCompare={onToggleCompare}
         onToggleCompareAI={onToggleCompareAI}
         onRetryCompareSlide={onRetryCompareSlide}
+        aiOptions={aiOptions}
+        onAIOptionChange={onAIOptionChange}
       />
     </div>
   );

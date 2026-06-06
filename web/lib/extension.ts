@@ -7,10 +7,23 @@ export function isExtensionActive(): boolean {
 
 let requestCounter = 0;
 
+// AIOptions — optional per-AI feature toggles forwarded to the content script. The shape mirrors
+// AIOptionSlots in aiOptionsStorage.ts: each slot is an id from the matching pill in
+// aiFeatures.ts (e.g. options.feature='web-search', options.intelligence='thinking'). Omitting
+// any slot means "leave it alone" — applyOptions in the AI's content script defaults to the
+// site's neutral state (no tool, default model). Adding this field is fully backwards-
+// compatible: callers that don't pass options send exactly the payload they did before.
+export type AIOptions = {
+  feature?: string | string[];
+  intelligence?: string;
+  style?: string;
+};
+
 export function sendMessageToAI(
   ai: AIModel,
   message: string,
-  timeoutMs: number = 60000
+  timeoutMs: number = 60000,
+  options?: AIOptions
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const requestId = `req_${++requestCounter}_${Date.now()}`;
@@ -35,7 +48,12 @@ export function sendMessageToAI(
     }
 
     window.addEventListener('message', handler);
-    window.postMessage({ type: 'WRAPPERR_SEND', requestId, ai, message }, '*');
+    // options is included only when provided so legacy payloads stay byte-identical. The bridge
+    // (extension/content-scripts/wrapperr-bridge.js) forwards event.data whole, so the SW
+    // receives options without any bridge change.
+    const payload: Record<string, unknown> = { type: 'WRAPPERR_SEND', requestId, ai, message };
+    if (options) payload.options = options;
+    window.postMessage(payload, '*');
   });
 }
 

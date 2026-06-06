@@ -2,8 +2,14 @@
 
 import { useState, useRef, useEffect } from 'react';
 import type { AIModel } from '@/lib/types';
+import type { AIOptionsMap } from '@/lib/aiOptionsStorage';
 import { AI_MODELS, hueOf, tint } from '@/lib/constants';
+import { AI_FEATURES, FEATURES_WIRED, PILL_ORDER, type AIFeatureConfig, type AIFeaturePill } from '@/lib/aiFeatures';
 import ProviderMark from './ProviderMark';
+
+// Per-AI slot keys we support today. Kept inline (not imported) because TypeScript's keyof on
+// AIFeatureConfig already includes 'skills', and skills is render-only (no selection persists).
+type SelectableSlot = 'feature' | 'intelligence' | 'style';
 
 interface Props {
   selectedAI: AIModel;
@@ -19,15 +25,18 @@ interface Props {
   // (X button on the chip) or automatically after send.
   quote?: string | null;
   onClearQuote?: () => void;
-  // Compare AI — when compareMode is true: the Compare feature pill becomes active, the model
-  // selector dropdown is replaced with a "Compare" badge (since switching the single AI doesn't
-  // apply), and the helper line reflects fan-out. compareCount is the size of the chosen set.
-  // onToggleCompare flips the parent's compareMode (the only way to switch off besides new chat
-  // / refresh, per spec).
+  // Compare AI — when compareMode is true: the standalone Compare button reads as ON, all per-AI
+  // pills are hidden (Compare is a baseline shootout and per-AI tools don't apply), and the AI
+  // selector dropdown is replaced with a "Compare" badge. compareCount is the size of the chosen
+  // set. onToggleCompare flips the parent's compareMode.
   compareMode?: boolean;
   compareCount?: number;
   compareLocked?: boolean;
   onToggleCompare?: () => void;
+  // Per-AI pill selections + writer. See web/lib/aiFeatures.ts (config) and
+  // web/lib/aiOptionsStorage.ts (persistence).
+  aiOptions: AIOptionsMap;
+  onAIOptionChange: (ai: AIModel, slot: SelectableSlot, value: string | string[] | undefined) => void;
 }
 
 const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
@@ -37,16 +46,44 @@ const TIMEOUT_OPTIONS: { ms: number; label: string }[] = [
   { ms: 300_000, label: '5m' },
 ];
 
-// FEATURE_OPTIONS: placeholder feature pills (Web Search / Compare / Deep Research). Purely
-// visual right now — selecting one does nothing in the send pipeline. Wired into local state so
-// the chosen pill highlights with the active provider hue. When the real features land, lift
-// this state up and thread it into the send call.
-type FeatureId = 'web-search' | 'compare' | 'deep-research';
-const FEATURE_OPTIONS: { id: FeatureId; label: string }[] = [
-  { id: 'web-search', label: 'Web Search' },
-  { id: 'compare', label: 'Compare' },
-  { id: 'deep-research', label: 'Deep Research' },
-];
+// PILL_ICONS — one tiny inline SVG per slot. We render different glyphs by slot (not by AI) so
+// the chat bar reads the same across providers. Tools = globe, Model = spark, Style = brush,
+// Skills = grid. Keep these small; the pill chrome owns most of the visual weight.
+function PillIcon({ slot }: { slot: keyof AIFeatureConfig }) {
+  const common = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  if (slot === 'feature') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
+      </svg>
+    );
+  }
+  if (slot === 'intelligence') {
+    return (
+      <svg {...common}>
+        <path d="M12 2v4M12 18v4M4 12h4M16 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8" />
+      </svg>
+    );
+  }
+  if (slot === 'style') {
+    return (
+      <svg {...common}>
+        <path d="M4 20s2-1 4-1 3 2 6 2 6-4 6-4" />
+        <path d="M14 4l6 6-4 4-6-6 4-4z" />
+      </svg>
+    );
+  }
+  // skills
+  return (
+    <svg {...common}>
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
 
 export default function InputBar({
   selectedAI,
@@ -62,37 +99,44 @@ export default function InputBar({
   compareCount = 0,
   compareLocked = false,
   onToggleCompare,
+  aiOptions,
+  onAIOptionChange,
 }: Props) {
   const [text, setText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
-  const [featureOpen, setFeatureOpen] = useState(false);
-  // selectedFeature: which placeholder pill is active. Null = none. Only one at a time
-  // (ChatGPT-style). Has zero effect on send right now.
-  const [selectedFeature, setSelectedFeature] = useState<FeatureId | null>(null);
+  // openPillKey: which per-AI pill dropdown is currently open. Only one at a time. Keyed by
+  // slot name ('feature' | 'intelligence' | 'style' | 'skills') because each AI has at most one
+  // of each. Null means all closed.
+  const [openPillKey, setOpenPillKey] = useState<keyof AIFeatureConfig | null>(null);
   // attachedFile: filename the user picked via the "+" button. Placeholder only — the file
   // bytes are never read or uploaded. Just rendered as a chip and cleared on send.
   const [attachedFile, setAttachedFile] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<HTMLDivElement>(null);
-  const featureRef = useRef<HTMLDivElement>(null);
+  // pillsContainerRef wraps ALL per-AI pills as one outside-click region. We don't need a ref
+  // per pill because only one can be open at a time and clicking from one pill to another is
+  // still inside this container — the click-outside handler closes the open one and the new
+  // button's onClick opens the new one.
+  const pillsContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentAI = AI_MODELS.find((m) => m.id === selectedAI)!;
   const currentTimeoutLabel =
     TIMEOUT_OPTIONS.find((o) => o.ms === timeoutMs)?.label ?? `${Math.round(timeoutMs / 1000)}s`;
-  // currentFeature: which pill shows as the "active" label on the trigger button. Compare
-  // takes precedence over the placeholder selectedFeature when compareMode is true — that way
-  // the trigger reflects the real feature state, not the cosmetic one.
-  const currentFeature = compareMode
-    ? FEATURE_OPTIONS.find((f) => f.id === 'compare') ?? null
-    : FEATURE_OPTIONS.find((f) => f.id === selectedFeature) ?? null;
-  // Active hue drives the composer border/focus ring, model chip, send button, helper line.
   const hue = hueOf(selectedAI);
+  // featuresConfig: which pills this AI declares. Perplexity isn't in AI_FEATURES so this is
+  // undefined for it; we render zero pills in that case (Perplexity stays parked).
+  const featuresConfig = AI_FEATURES[selectedAI];
+  const currentAIOptions = aiOptions[selectedAI] ?? {};
+  // wired: does this AI's content-script applyOptions actually do anything yet? Drives the
+  // "tool toggles wire up in a later session" caption. ChatGPT=true in Session 1; others flip
+  // true in their own sessions.
+  const wired = FEATURES_WIRED[selectedAI];
 
-  // Close dropdowns on outside click. One listener handles all three so the bottom row stays
-  // tidy — each dropdown only closes if the click landed outside its own container.
+  // Close dropdowns on outside click. One listener handles all three regions — AI dropdown,
+  // timeout pill, and the per-AI pills container — so the bottom row stays tidy.
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -101,13 +145,19 @@ export default function InputBar({
       if (timeoutRef.current && !timeoutRef.current.contains(e.target as Node)) {
         setTimeoutOpen(false);
       }
-      if (featureRef.current && !featureRef.current.contains(e.target as Node)) {
-        setFeatureOpen(false);
+      if (pillsContainerRef.current && !pillsContainerRef.current.contains(e.target as Node)) {
+        setOpenPillKey(null);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Close any open per-AI pill when the user switches AI — the new AI's pill set is likely
+  // different and a stale open state would render as "phantom dropdown attached to nothing".
+  useEffect(() => {
+    setOpenPillKey(null);
+  }, [selectedAI]);
 
   // Auto-grow textarea — clamps at 200px so the composer doesn't eat the viewport on long drafts.
   useEffect(() => {
@@ -151,24 +201,83 @@ export default function InputBar({
     if (f) setAttachedFile(f.name);
   }
 
-  // handleFeatureSelect: pick a placeholder feature pill, or deselect it if the same option is
-  // clicked again. Only one feature can be active at a time. The Compare entry is special: it
-  // bubbles up to onToggleCompare in the parent (real feature, not a placeholder); the other
-  // two are still cosmetic.
-  function handleFeatureSelect(id: FeatureId) {
-    if (id === 'compare') {
-      onToggleCompare?.();
-      setFeatureOpen(false);
-      return;
-    }
-    setSelectedFeature((cur) => (cur === id ? null : id));
-    setFeatureOpen(false);
-  }
-
   function handleAISelect(ai: AIModel) {
     onSwitchAI(ai);
     setDropdownOpen(false);
   }
+
+  // handlePillOptionClick: applies the click to the per-AI options store. For single-select
+  // pills (the default), clicking the already-active option deselects it (toggle-off behavior,
+  // matches ChatGPT's Tools popover). For multi-select pills (future-proofing — none today),
+  // toggle membership in the string[] array. Skills pill is comingSoon so its options can't be
+  // clicked, but defend anyway.
+  function handlePillOptionClick(slot: keyof AIFeatureConfig, pill: AIFeaturePill, optId: string, optComingSoon?: boolean) {
+    if (pill.comingSoon || optComingSoon) return;
+    if (slot === 'skills') return; // skills is render-only for now
+    const writableSlot = slot as SelectableSlot;
+    if (pill.multiSelect) {
+      const cur = currentAIOptions[writableSlot];
+      const arr = Array.isArray(cur) ? cur : cur ? [cur as string] : [];
+      const next = arr.includes(optId) ? arr.filter((x) => x !== optId) : [...arr, optId];
+      onAIOptionChange(selectedAI, writableSlot, next.length ? next : undefined);
+    } else {
+      const cur = currentAIOptions[writableSlot];
+      const curStr = Array.isArray(cur) ? cur[0] : cur;
+      onAIOptionChange(selectedAI, writableSlot, curStr === optId ? undefined : optId);
+    }
+    setOpenPillKey(null);
+  }
+
+  // isOptionActive: read the active state for one option row in a pill's dropdown. Handles both
+  // single- and multi-select shapes from currentAIOptions.
+  function isOptionActive(slot: keyof AIFeatureConfig, pill: AIFeaturePill, optId: string): boolean {
+    if (slot === 'skills') return false;
+    const cur = currentAIOptions[slot as SelectableSlot];
+    if (cur === undefined) return false;
+    if (pill.multiSelect) {
+      const arr = Array.isArray(cur) ? cur : [cur as string];
+      return arr.includes(optId);
+    }
+    const curStr = Array.isArray(cur) ? cur[0] : (cur as string);
+    return curStr === optId;
+  }
+
+  // activePillLabel: short label shown on the pill trigger button. For single-select with a
+  // value, show the chosen option's label. For multi-select with values, show "N selected".
+  // Otherwise show the pill's default label (e.g. "Tools", "Model").
+  function activePillLabel(slot: keyof AIFeatureConfig, pill: AIFeaturePill): string {
+    if (slot === 'skills') return pill.label;
+    const cur = currentAIOptions[slot as SelectableSlot];
+    if (cur === undefined) return pill.label;
+    if (pill.multiSelect) {
+      const arr = Array.isArray(cur) ? cur : [cur as string];
+      if (arr.length === 0) return pill.label;
+      if (arr.length === 1) {
+        const o = pill.options.find((x) => x.id === arr[0]);
+        return o?.label ?? pill.label;
+      }
+      return `${arr.length} selected`;
+    }
+    const curStr = Array.isArray(cur) ? cur[0] : (cur as string);
+    const o = pill.options.find((x) => x.id === curStr);
+    return o?.label ?? pill.label;
+  }
+
+  // pillIsActive: should the trigger button render in active hue tint? True when any option is
+  // selected for this slot. Skills (coming-soon) never reads as active.
+  function pillIsActive(slot: keyof AIFeatureConfig, pill: AIFeaturePill): boolean {
+    if (slot === 'skills' || pill.comingSoon) return false;
+    const cur = currentAIOptions[slot as SelectableSlot];
+    if (cur === undefined) return false;
+    if (Array.isArray(cur)) return cur.length > 0;
+    return Boolean(cur);
+  }
+
+  // pillsToRender: the slot keys this AI declares, in PILL_ORDER. Empty array when Compare is
+  // on (per-AI pills hidden) or for AIs without a featuresConfig (e.g. Perplexity).
+  const pillsToRender: (keyof AIFeatureConfig)[] = compareMode || !featuresConfig
+    ? []
+    : PILL_ORDER.filter((k) => featuresConfig[k] !== undefined);
 
   return (
     <div style={{ padding: '10px 0 22px', background: 'linear-gradient(180deg, transparent, var(--bg) 38%)' }}>
@@ -310,74 +419,96 @@ export default function InputBar({
               </svg>
             </button>
 
-            {/* Feature pill: Web Search / Compare / Deep Research. Active selection tints
-                with the provider hue. Placeholder — no effect on send. */}
-            <div className="relative shrink-0" ref={featureRef}>
-              <button
-                onClick={() => setFeatureOpen((v) => !v)}
-                disabled={loading}
-                title={currentFeature ? `${currentFeature.label} (placeholder)` : 'Features (placeholder)'}
-                className="flex items-center transition-colors disabled:opacity-50"
-                style={{
-                  gap: 7,
-                  padding: '7px 11px',
-                  borderRadius: 9,
-                  color: currentFeature ? hue : 'var(--mid)',
-                  background: currentFeature ? tint(hue, 0.08) : 'transparent',
-                  border: 'none',
-                  fontSize: 12.5,
-                  cursor: 'pointer',
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
-                </svg>
-                <span>{currentFeature ? currentFeature.label : 'Web Search'}</span>
-              </button>
+            {/* Per-AI pills container. Hidden entirely when Compare is on — Compare is a
+                baseline shootout, per-AI tools/models don't apply. The container itself is the
+                click-outside region for all pills (see useEffect above). */}
+            <div ref={pillsContainerRef} className="flex items-center shrink-0" style={{ gap: 4 }}>
+              {pillsToRender.map((slot) => {
+                const pill = featuresConfig![slot]!;
+                const active = pillIsActive(slot, pill);
+                const label = activePillLabel(slot, pill);
+                const isOpen = openPillKey === slot;
+                const disabledPill = pill.comingSoon === true;
+                return (
+                  <div key={slot} className="relative shrink-0">
+                    <button
+                      onClick={() => {
+                        if (disabledPill) return;
+                        setOpenPillKey(isOpen ? null : slot);
+                      }}
+                      disabled={loading || disabledPill}
+                      title={disabledPill ? `${pill.label} — coming soon` : pill.label}
+                      className="flex items-center transition-colors disabled:opacity-50"
+                      style={{
+                        gap: 7,
+                        padding: '7px 11px',
+                        borderRadius: 9,
+                        color: active ? hue : 'var(--mid)',
+                        background: active ? tint(hue, 0.08) : 'transparent',
+                        border: 'none',
+                        fontSize: 12.5,
+                        cursor: disabledPill ? 'not-allowed' : 'pointer',
+                        opacity: disabledPill ? 0.5 : 1,
+                      }}
+                    >
+                      <PillIcon slot={slot} />
+                      <span>{label}</span>
+                      {disabledPill && (
+                        <span className="font-mono" style={{ fontSize: 9.5, color: 'var(--faint)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                          soon
+                        </span>
+                      )}
+                    </button>
 
-              {featureOpen && (
-                <div
-                  className="absolute bottom-full mb-2 left-0 shadow-xl z-50"
-                  style={{
-                    background: 'var(--panel)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 12,
-                    padding: 4,
-                    minWidth: 180,
-                  }}
-                >
-                  {FEATURE_OPTIONS.map((opt) => {
-                    // Compare's active state is the parent compareMode, not local selectedFeature.
-                    // That way clicking it twice (on → off) reflects the real feature state.
-                    const active = opt.id === 'compare' ? compareMode : opt.id === selectedFeature;
-                    return (
-                      <button
-                        key={opt.id}
-                        onClick={() => handleFeatureSelect(opt.id)}
-                        className="w-full text-left transition-colors flex items-center justify-between"
+                    {isOpen && !disabledPill && (
+                      <div
+                        className="absolute bottom-full mb-2 left-0 shadow-xl z-50"
                         style={{
-                          padding: '8px 12px',
-                          gap: 8,
-                          fontSize: 13,
-                          color: active ? hue : 'var(--mid)',
-                          background: active ? tint(hue, 0.08) : 'transparent',
-                          border: 'none',
-                          borderRadius: 8,
-                          cursor: 'pointer',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--line)',
+                          borderRadius: 12,
+                          padding: 4,
+                          minWidth: 180,
                         }}
                       >
-                        <span>{opt.label}</span>
-                        {active && (
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+                        {pill.options.map((opt) => {
+                          const optActive = isOptionActive(slot, pill, opt.id);
+                          const optDisabled = opt.comingSoon === true;
+                          return (
+                            <button
+                              key={opt.id}
+                              onClick={() => handlePillOptionClick(slot, pill, opt.id, opt.comingSoon)}
+                              disabled={optDisabled}
+                              className="w-full text-left transition-colors flex items-center justify-between"
+                              style={{
+                                padding: '8px 12px',
+                                gap: 8,
+                                fontSize: 13,
+                                color: optDisabled ? 'var(--faint)' : optActive ? hue : 'var(--mid)',
+                                background: optActive && !optDisabled ? tint(hue, 0.08) : 'transparent',
+                                border: 'none',
+                                borderRadius: 8,
+                                cursor: optDisabled ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              <span>{opt.label}</span>
+                              {optDisabled ? (
+                                <span className="font-mono" style={{ fontSize: 9.5, color: 'var(--faint)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                  soon
+                                </span>
+                              ) : optActive ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Timeout pill — mono numeric label per design. */}
@@ -446,6 +577,36 @@ export default function InputBar({
             </div>
 
             <div style={{ flex: 1 }} />
+
+            {/* Compare AI standalone button — sits between the Timeout pill and the AI switcher.
+                Always visible (one of Wrapperr's flagship features), reads as active in the
+                provider hue when compareMode is on. Clicking flips parent compareMode. The
+                AI-switcher dropdown to the right still swaps to a "Compare" badge while on. */}
+            <button
+              onClick={() => onToggleCompare?.()}
+              disabled={loading || compareLocked}
+              title={compareMode ? 'Compare AI · click to switch off' : 'Compare AI — fan out to multiple models'}
+              className="flex items-center shrink-0 transition-colors disabled:opacity-50"
+              style={{
+                gap: 7,
+                padding: '7px 11px',
+                borderRadius: 9,
+                marginRight: 4,
+                color: compareMode ? hue : 'var(--mid)',
+                background: compareMode ? tint(hue, 0.08) : 'transparent',
+                border: 'none',
+                fontSize: 12.5,
+                cursor: compareLocked ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              <span>Compare</span>
+            </button>
 
             {/* Model selector chip — provider mark + label + chevron, tinted with the active
                 hue. Replaced by a static "Compare" badge while compareMode is on, since
@@ -613,6 +774,19 @@ export default function InputBar({
             </button>
           </div>
         </div>
+
+        {/* Stub-UX caption — when the selected AI has pills declared but its applyOptions isn't
+            wired yet (FEATURES_WIRED[ai] === false), tell the user the toggles are cosmetic.
+            Drops out automatically when each AI's session ships and flips its FEATURES_WIRED to
+            true. Hidden during Compare since pills are hidden too. */}
+        {!compareMode && featuresConfig && !wired && pillsToRender.length > 0 && (
+          <div
+            className="font-mono text-center"
+            style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 4 }}
+          >
+            tool toggles for {currentAI.label} wire up in a later session
+          </div>
+        )}
 
         {/* Helper line — mono, with the active provider label tinted in its hue. In compareMode
             the wording changes to reflect fan-out and the locked/unlocked state. */}

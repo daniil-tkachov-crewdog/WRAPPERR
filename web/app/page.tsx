@@ -5,6 +5,7 @@ import type { User } from '@supabase/supabase-js';
 import type { Message, AIModel, ChatSummary, Profile, CompareResponse } from '@/lib/types';
 import { AI_MODELS, MAX_CHATS, SUMMARY_PROMPT } from '@/lib/constants';
 import { isExtensionActive, sendMessageToAI, rereadFromAI } from '@/lib/extension';
+import { loadAIOptions, saveAIOptions, type AIOptionsMap } from '@/lib/aiOptionsStorage';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import ChatWindow from '@/components/layout/ChatWindow';
@@ -44,6 +45,31 @@ export default function Home() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareAIs, setCompareAIs] = useState<AIModel[]>([]);
   const [compareLocked, setCompareLocked] = useState(false);
+
+  // ── Per-AI options (pill selections) ─────────────────────────────────────
+  // aiOptions: which feature / intelligence / style slot value each AI currently has selected.
+  // Switching the active AI preserves the previously-selected slots for the prior AI, so
+  // bouncing ChatGPT→Claude→ChatGPT keeps Thinking sticky. Persisted to localStorage under
+  // 'wrapperr:aiOptions:v1' via aiOptionsStorage.ts. Never persisted to Supabase — these are
+  // session-local UX toggles, not chat data. Lazy initialiser keeps SSR safe (loadAIOptions
+  // returns {} when window is undefined).
+  const [aiOptions, setAiOptions] = useState<AIOptionsMap>(() => loadAIOptions());
+  useEffect(() => { saveAIOptions(aiOptions); }, [aiOptions]);
+
+  // setAIOption: update one slot for one AI. Pass undefined to clear the slot (e.g. "no tool
+  // active"). Used by InputBar via prop-drilling through ChatWindow → ActiveChatState.
+  function setAIOption(ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) {
+    setAiOptions((prev) => {
+      const cur = prev[ai] ?? {};
+      const next = { ...cur };
+      if (value === undefined) {
+        delete next[slot];
+      } else {
+        next[slot] = value as never;
+      }
+      return { ...prev, [ai]: next };
+    });
+  }
 
   // Auth init
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,6 +228,8 @@ export default function Home() {
   // status: 'error' slides; they do NOT poison the other slots. After this resolves, compareLocked
   // is true so follow-ups reuse the same set. Intentionally never calls saveChat() — Compare is
   // memory-only for now (Supabase schema has a single ai_model per chat).
+  // Compare deliberately ignores aiOptions[ai] — it's a baseline shootout. Per-AI tools/models
+  // apply only to the single-AI flow (handleSendMessage below).
   async function runCompareTurn(text: string, ais: AIModel[]) {
     const userMessage: Message = {
       id: generateId(),
@@ -362,7 +390,11 @@ export default function Home() {
     }
 
     try {
-      const response = await sendMessageToAI(selectedAI, text, timeoutMs);
+      // Per-AI options for the active AI are passed through. If applyOptions isn't wired for
+      // this AI yet (FEATURES_WIRED[ai] === false in aiFeatures.ts) the content script ignores
+      // the payload and sends with the site's current state — the UI shows a dim caption so
+      // the user knows the toggles aren't live yet.
+      const response = await sendMessageToAI(selectedAI, text, timeoutMs, aiOptions[selectedAI]);
 
       const aiMessage: Message = {
         id: generateId(),
@@ -476,6 +508,8 @@ export default function Home() {
           onToggleCompare={toggleCompare}
           onToggleCompareAI={toggleCompareAI}
           onRetryCompareSlide={retryCompareSlide}
+          aiOptions={aiOptions}
+          onAIOptionChange={setAIOption}
         />
       </main>
     </div>

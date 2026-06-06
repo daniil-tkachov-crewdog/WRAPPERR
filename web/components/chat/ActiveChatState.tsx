@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Message, AIModel } from '@/lib/types';
+import type { AIOptionsMap } from '@/lib/aiOptionsStorage';
 import { hueOf, tint } from '@/lib/constants';
 import MessageBubble from './MessageBubble';
 import InputBar from './InputBar';
@@ -29,6 +30,9 @@ interface Props {
   onToggleCompare: () => void;
   onToggleCompareAI: (ai: AIModel) => void;
   onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
+  // Per-AI pill state. See ChatWindow.tsx for the same drilled props.
+  aiOptions: AIOptionsMap;
+  onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
 }
 
 // ActiveChatState — the live chat view.
@@ -57,6 +61,8 @@ export default function ActiveChatState({
   onToggleCompare,
   onToggleCompareAI,
   onRetryCompareSlide,
+  aiOptions,
+  onAIOptionChange,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [quote, setQuote] = useState<string | null>(null);
@@ -192,6 +198,8 @@ export default function ActiveChatState({
           // Disable send while Compare is on but fewer than 2 AIs are picked. Once locked, the
           // set can't drop below 2 so this naturally stops gating.
           disabled={compareMode && !compareLocked && compareAIs.length < 2}
+          aiOptions={aiOptions}
+          onAIOptionChange={onAIOptionChange}
         />
       </div>
     </div>
