@@ -69,6 +69,27 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// radixOpen: ChatGPT's Tools popover and model picker are built with Radix UI's DropdownMenu,
+// which subscribes to `pointerdown` (mouse path) — a synthetic `.click()` fires `click` but
+// skips pointerdown, so Radix never sees an "open" intent. We dispatch the full pointer →
+// mouse → click sequence at the element's centre point. Send/menu-item clicks are NOT Radix
+// triggers (they're plain buttons or list items), so they still use `.click()` and we keep it
+// that way to avoid double-firing handlers there.
+function radixOpen(el) {
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y };
+  const down = { ...base, pointerType: 'mouse', pointerId: 1, isPrimary: true, button: 0, buttons: 1 };
+  const up   = { ...base, pointerType: 'mouse', pointerId: 1, isPrimary: true, button: 0, buttons: 0 };
+  el.dispatchEvent(new PointerEvent('pointerdown', down));
+  el.dispatchEvent(new MouseEvent('mousedown',   { ...base, button: 0, buttons: 1 }));
+  el.dispatchEvent(new PointerEvent('pointerup',   up));
+  el.dispatchEvent(new MouseEvent('mouseup',     { ...base, button: 0, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent('click',       { ...base, button: 0, buttons: 0 }));
+}
+
 // applyOptions: best-effort apply per-AI feature toggles (Web Search, Deep Research, Thinking
 // model) BEFORE injecting the prompt. options shape: { feature?: string | string[],
 // intelligence?: string, style?: string }. The set of ids comes from web/lib/aiFeatures.ts.
@@ -217,7 +238,7 @@ async function openToolsPopover() {
   const trigger = findToolsTrigger();
   if (!trigger) return false;
   if (trigger.getAttribute('aria-expanded') === 'true') return true;
-  trigger.click();
+  radixOpen(trigger);
   const ok = await waitFor(() => trigger.getAttribute('aria-expanded') === 'true', 1500);
   return Boolean(ok);
 }
@@ -226,17 +247,20 @@ async function openToolsPopover() {
 // back to Escape if the trigger is missing or the click didn't take. Waits for aria-expanded
 // to flip back to false so a subsequent send-button click can't accidentally land in the menu.
 async function closeToolsPopover() {
-  const trigger = findToolsTrigger();
-  if (trigger && trigger.getAttribute('aria-expanded') === 'true') {
-    trigger.click();
-    const closed = await waitFor(() => trigger.getAttribute('aria-expanded') !== 'true', 500);
-    if (closed) return;
-  }
+  // Prefer Escape — pointer-events on the trigger when the menu is open can re-trigger Radix's
+  // open intent on some versions. Escape always closes the topmost dropdown cleanly.
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  await waitFor(() => {
+  const closed = await waitFor(() => {
     const t = findToolsTrigger();
     return !t || t.getAttribute('aria-expanded') !== 'true';
   }, 500);
+  if (closed) return;
+  // Escape ignored? Try clicking the trigger as a fallback toggle.
+  const trigger = findToolsTrigger();
+  if (trigger && trigger.getAttribute('aria-expanded') === 'true') {
+    radixOpen(trigger);
+    await waitFor(() => trigger.getAttribute('aria-expanded') !== 'true', 500);
+  }
 }
 
 // Map our internal feature ids to ChatGPT's row labels. 'create-image' is `comingSoon: true` in
@@ -454,9 +478,9 @@ async function applyModelIntelligence(intelligence) {
     return;
   }
 
-  // Open menu.
+  // Open menu via pointer-event sequence (Radix DropdownMenu requires pointerdown).
   if (trigger.getAttribute('aria-expanded') !== 'true') {
-    trigger.click();
+    radixOpen(trigger);
     const opened = await waitFor(() => trigger.getAttribute('aria-expanded') === 'true', 1500);
     if (!opened) {
       console.warn('[wrapperr] ChatGPT model picker did not open — sending with current model');
