@@ -281,7 +281,16 @@ export default function InputBar({
 
   return (
     <div style={{ padding: '10px 0 22px', background: 'linear-gradient(180deg, transparent, var(--bg) 38%)' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      {/* Width: defaults to 720 (the chat-thread width) but grows to fit a wider pill row
+          when an AI declares many pills (e.g. Claude: Tools + Model + Style + Skills +
+          Timeout + Compare + AI switcher + Send). The growth is centered so the composer
+          expands in both directions equally, never overflowing past 960 / viewport. */}
+      <div style={{
+        width: 'fit-content',
+        minWidth: 'min(720px, calc(100% - 16px))',
+        maxWidth: 'min(960px, calc(100% - 16px))',
+        margin: '0 auto',
+      }}>
         {/* Quote chip — rendered above the composer when the user highlighted text via
             "Ask about it". The text is prepended as a Markdown blockquote at send time. */}
         {quote && (

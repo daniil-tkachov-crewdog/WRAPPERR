@@ -328,22 +328,52 @@ async function openToolsPopover() {
   return Boolean(ok);
 }
 
-// closeToolsPopover: prefer Escape (always closes the topmost menu cleanly, also closes any
-// open submenu nested inside it in one go); fall back to clicking the trigger as a toggle.
-// Waits for aria-expanded to flip back to false so a subsequent send-button click can't
-// land on the menu surface.
+// dismissOpenMenu: synthetic outside-click that closes any Base UI / Radix portal-rendered
+// menu. Those libraries register document-level pointerdown/mousedown listeners and dismiss
+// when the event's target isn't contained in the menu element. We dispatch directly on
+// document.body so the event's target IS body — guaranteed outside any menu — and limit the
+// payload to the two events the dismiss path actually listens for. We do NOT fire pointerup
+// or click, because those could activate something visible at (1, 1) (e.g. a sidebar chat
+// item in claude.ai) and navigate away from the current conversation before the prompt is
+// even sent. CRITICAL: if a future library version listens on `click` only, dismissal will
+// silently stop working and menus will stay open — Escape and trigger-toggle fallbacks in
+// closeToolsPopover catch that case.
+function dismissOpenMenu() {
+  document.body.dispatchEvent(new PointerEvent('pointerdown', {
+    bubbles: true, cancelable: true, composed: true, view: window,
+    clientX: 1, clientY: 1, pointerType: 'mouse', pointerId: 1, isPrimary: true, button: 0, buttons: 1,
+  }));
+  document.body.dispatchEvent(new MouseEvent('mousedown', {
+    bubbles: true, cancelable: true, composed: true, view: window,
+    clientX: 1, clientY: 1, button: 0, buttons: 1,
+  }));
+}
+
+// closeToolsPopover: dismiss the Tools popover (and any open submenu inside it) so the
+// upcoming send-button click can't land on the menu surface, and so the user doesn't see a
+// stranded open menu when they revisit the claude.ai tab. Three escalating strategies:
+//   1. Outside-click via dismissOpenMenu — works for Base UI / Radix portal menus that
+//      bind on document pointerdown/mousedown. This is the only strategy that reliably
+//      closes BOTH the root popover and any nested submenu in one shot.
+//   2. Escape keydown on document — covers libraries that scope the dismiss listener to
+//      the menu element. Fired twice with a small gap because a submenu intercepts the
+//      first Escape and the root popover catches the second.
+//   3. Toggle the trigger — last-resort, only if everything else left the popover open.
 async function closeToolsPopover() {
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  // Submenu may need a second Escape — the first closes the submenu, the second closes the
-  // root popover. Fire both with a small gap; harmless if only one was needed.
-  await sleep(60);
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  const closed = await waitFor(() => {
+  dismissOpenMenu();
+  let closed = await waitFor(() => {
     const t = findToolsTrigger();
     return !t || t.getAttribute('aria-expanded') !== 'true';
   }, 500);
   if (closed) return;
-  // Escape ignored (rare) — toggle the trigger as a fallback.
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await sleep(60);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  closed = await waitFor(() => {
+    const t = findToolsTrigger();
+    return !t || t.getAttribute('aria-expanded') !== 'true';
+  }, 500);
+  if (closed) return;
   const trigger = findToolsTrigger();
   if (trigger && trigger.getAttribute('aria-expanded') === 'true') {
     popoverOpen(trigger);
@@ -718,12 +748,22 @@ async function applyModelIntelligence(intelligence) {
     return fresh && fresh.getAttribute('aria-expanded') !== 'true';
   }, 1000);
 
-  // Belt-and-braces: if the menu is still open after the selection, close it so the upcoming
-  // send-button click can't land inside.
+  // Belt-and-braces: if the menu is still open after the selection, close it so the
+  // upcoming send-button click can't land inside AND the user doesn't see a stranded open
+  // model picker on their next visit to the claude.ai tab. dismissOpenMenu first
+  // (outside-click on document.body, the only thing Base UI's portal menu listens to),
+  // Escape fallback if that didn't take.
   const finalTrigger = findModelTrigger();
   if (finalTrigger && finalTrigger.getAttribute('aria-expanded') === 'true') {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await sleep(100);
+    dismissOpenMenu();
+    const closed = await waitFor(() => {
+      const t = findModelTrigger();
+      return !t || t.getAttribute('aria-expanded') !== 'true';
+    }, 400);
+    if (!closed) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(100);
+    }
   }
 }
 
