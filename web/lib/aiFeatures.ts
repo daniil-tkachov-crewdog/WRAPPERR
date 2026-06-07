@@ -148,7 +148,7 @@ export const AI_FEATURES: Partial<Record<AIModel, AIFeatureConfig>> = {
 // Perplexity is parked (not in AI_FEATURES at all), so it's not in this map either.
 export const FEATURES_WIRED: Record<AIModel, boolean> = {
   chatgpt:    true,
-  claude:     false,
+  claude:     true,
   grok:       false,
   perplexity: false,
   gemini:     false,
