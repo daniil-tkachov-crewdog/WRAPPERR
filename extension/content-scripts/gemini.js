@@ -115,13 +115,17 @@ function isVisible(el) {
   return r.width > 0 && r.height > 0;
 }
 
-// overlayRoot: Angular Material (CDK) renders every menu/submenu into a portal —
-// <div class="cdk-overlay-container"> attached to <body>, NOT next to the trigger button.
-// All menu-row queries below must search this container (or the whole document as fallback),
-// never the trigger's subtree. If Gemini ever migrates off Angular CDK this returns null and
-// the row finders silently widen to whole-document scans.
+// overlayRoot: Angular Material (CDK) renders menu portals into <div class="cdk-overlay-container">,
+// BUT Gemini's <gem-menu> wrapper attaches some menus (model picker confirmed) directly to body
+// instead — outside the cdk container. Diagnostic run 2026-06: opening the model picker shows
+// cdk-overlay-container present but empty; the gem-menu-item rows live elsewhere in the doc.
+// We therefore prefer cdk-overlay-container ONLY when it has content; otherwise the row finders
+// fall back to scanning the whole document, relying on isVisible() to filter out collapsed/
+// hidden menu fragments.
 function overlayRoot() {
-  return document.querySelector('.cdk-overlay-container');
+  const c = document.querySelector('.cdk-overlay-container');
+  if (c && c.querySelector('*')) return c;
+  return null;
 }
 
 // MENU_ANIMATION_MS: Material menus animate open over ~150 ms; querying for rows immediately
@@ -197,44 +201,49 @@ async function openToolsMenu() {
   if (!trigger) return false;
   if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click();
   await sleep(MENU_ANIMATION_MS);
+  // Search whole document — see overlayRoot() comment re: <gem-menu> portals attached outside
+  // cdk-overlay-container. isVisible filter on the row finder handles closed-menu artifacts.
   const populated = await waitFor(() => {
-    const root = overlayRoot() || document;
-    return root.querySelector('[role="menuitem"], [role="menuitemcheckbox"], [mat-list-item]');
+    return [...document.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [mat-list-item], gem-menu-item-content')]
+      .find(isVisible);
   }, 1500);
   return !!populated;
 }
 
-// findOverlayRow: find the clickable menu row whose label equals `label` inside the open
-// overlay. Shared by the Tools flow and the model finder's last resort. Three ranked
+// findOverlayRow: find the clickable menu row whose label equals `label`, anywhere in the
+// document. Shared by the Tools flow and the model finder's last resort. Three ranked
 // strategies (best→worst):
 //   1. Menu-item-role elements (menuitem / menuitemcheckbox / menuitemradio / option) matched
 //      on their dedicated label node — matches the captured DOM where toggle rows are
 //      <button role="menuitemcheckbox">.
 //   2. Gemini's label nodes (.gem-menu-item-label / .menu-text) matched by exact text, then
 //      climbed to the closest clickable ancestor — survives a role refactor.
-//   3. Brute scan of overlay buttons for text containment — last resort, restricted to
+//   3. Brute scan of clickable elements for text containment — last resort, restricted to
 //      clickable tags only so we never "click" a plain wrapper div with no handler bound.
-// Matching detail: rows append badges ("New") and tooltips to their full textContent, so when
-// a dedicated label node exists we require exact equality on it; only the rung-3 brute scan
-// uses `includes`, accepting the false-positive risk in exchange for survivability.
+// Why whole-document scope (not just overlay container)? Diagnostic 2026-06 showed Gemini's
+// <gem-menu> portals can sit outside .cdk-overlay-container — searching only the container
+// misses every model row. The isVisible() guard prevents collapsed/detached menu fragments
+// from matching. Matching detail: rows append badges ("New") and tooltips to their full
+// textContent, so when a dedicated label node exists we require exact equality on it; only
+// the rung-3 brute scan uses `includes`, accepting false-positive risk for survivability.
 function findOverlayRow(label) {
   const want = norm(label);
   if (!want) return null;
-  const root = overlayRoot() || document;
 
-  for (const r of root.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]')) {
+  for (const r of document.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]')) {
+    if (!isVisible(r)) continue;
     const lblNode = r.querySelector('.gem-menu-item-label, .menu-text, .label');
     const text = norm(lblNode ? lblNode.textContent : r.textContent);
-    if ((lblNode ? text === want : text.includes(want)) && isVisible(r)) return r;
+    if (lblNode ? text === want : text.includes(want)) return r;
   }
 
-  for (const n of root.querySelectorAll('.gem-menu-item-label, .menu-text')) {
+  for (const n of document.querySelectorAll('.gem-menu-item-label, .menu-text, span.label')) {
     if (norm(n.textContent) !== want) continue;
-    const row = n.closest('button, [mat-list-item], [role^="menuitem"], [role="option"]');
+    const row = n.closest('button, [mat-list-item], [role^="menuitem"], [role="option"], gem-menu-item');
     if (row && isVisible(row)) return row;
   }
 
-  for (const el of root.querySelectorAll('button, [role="button"], [mat-list-item]')) {
+  for (const el of document.querySelectorAll('button, [role="button"], [mat-list-item], gem-menu-item')) {
     if (norm(el.textContent).includes(want) && isVisible(el)) return el;
   }
   return null;
@@ -440,35 +449,39 @@ async function openModelMenu() {
   if (!trigger) return false;
   if (trigger.getAttribute('aria-expanded') !== 'true') trigger.click();
   await sleep(MENU_ANIMATION_MS);
+  // Whole-document scope — Gemini's <gem-menu> for the model picker attaches outside
+  // .cdk-overlay-container (verified by diagnostic). isVisible guards stale rows.
   const populated = await waitFor(() => {
-    const root = overlayRoot() || document;
-    return root.querySelector('gem-menu-item-content, [role="menuitemradio"], [role="menuitem"]');
+    return [...document.querySelectorAll('gem-menu-item-content, gem-menu-item, [role="menuitemradio"], [role="menuitem"]')]
+      .find(isVisible);
   }, 1500);
   return !!populated;
 }
 
-// findModelRow: find the clickable row for a model inside the open mode menu. Three ranked
+// findModelRow: find the clickable row for a model anywhere in the document. Three ranked
 // strategies (best→worst):
 //   1. gem-menu-item-content whose span.label equals the full label → climb to the closest
-//      clickable wrapper; fall back to the content element itself (click still bubbles).
-//   2. Role-based: any menu-item-role element in the overlay whose label node matches —
-//      survives the <gem-menu-item-content> custom element being renamed.
+//      clickable wrapper (<gem-menu-item> per diagnostic, role="menuitem"); fall back to the
+//      content element itself (click still bubbles).
+//   2. Role-based: any menu-item-role element whose label node matches — survives the
+//      <gem-menu-item-content> custom element being renamed.
 //   3. findOverlayRow's generic ladder (label-node walk + brute scan) as last resort.
 // Exact equality on the dedicated label node matters: "3.5 Flash" must never match the
 // "3.1 Flash-Lite" row or the "Thinking level" group via substring containment.
 function findModelRow(fullLabel) {
   const want = norm(fullLabel);
-  const root = overlayRoot() || document;
 
-  for (const c of root.querySelectorAll('gem-menu-item-content')) {
+  for (const c of document.querySelectorAll('gem-menu-item-content')) {
     const lbl = c.querySelector('span.label, .label');
     if (!lbl || norm(lbl.textContent) !== want) continue;
-    return c.closest('button, [role="menuitem"], [role="menuitemradio"], [role="option"], [mat-list-item]') || c;
+    if (!isVisible(c)) continue;
+    return c.closest('gem-menu-item, button, [role="menuitem"], [role="menuitemradio"], [role="option"], [mat-list-item]') || c;
   }
 
-  for (const r of root.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"]')) {
+  for (const r of document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], [role="option"]')) {
+    if (!isVisible(r)) continue;
     const lbl = r.querySelector('span.label, .label, .gem-menu-item-label');
-    if (lbl && norm(lbl.textContent) === want && isVisible(r)) return r;
+    if (lbl && norm(lbl.textContent) === want) return r;
   }
 
   return findOverlayRow(fullLabel);
