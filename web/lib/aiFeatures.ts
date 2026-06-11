@@ -115,11 +115,17 @@ export const AI_FEATURES: Partial<Record<AIModel, AIFeatureConfig>> = {
     },
     intelligence: {
       label: 'Model',
+      // Labels must match gemini.google.com's mode-picker rows EXACTLY — the content script
+      // matches rows by visible text. Verified against production 2026-06: "3.1 Flash-Lite" /
+      // "3.5 Flash" / "3.1 Pro". "Troubleshooting" was removed from Gemini's picker, so it was
+      // dropped here too. The 'flash-light' id is kept (despite the label spelling fix to
+      // "Flash-Lite") because ids persist in users' localStorage (wrapperr:aiOptions:v1) —
+      // renaming it would orphan saved selections. If you add a model here, also add it to
+      // MODEL_LABELS in extension/content-scripts/gemini.js.
       options: [
-        { id: 'flash-light',    label: '3.1 Flash-Light' },
+        { id: 'flash-light',    label: '3.1 Flash-Lite' },
         { id: 'flash',          label: '3.5 Flash' },
         { id: 'pro',            label: '3.1 Pro' },
-        { id: 'troubleshooting', label: 'Troubleshooting' },
       ],
     },
   },
@@ -149,9 +155,9 @@ export const AI_FEATURES: Partial<Record<AIModel, AIFeatureConfig>> = {
 export const FEATURES_WIRED: Record<AIModel, boolean> = {
   chatgpt:    true,
   claude:     true,
-  grok:       false,
+  grok:       true,
   perplexity: false,
-  gemini:     false,
+  gemini:     true,
   deepseek:   false,
 };
 
