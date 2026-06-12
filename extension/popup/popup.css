@@ -1,3 +1,7 @@
+/* Popup-only styles. Standalone from the web app's globals.css — Chrome injects this directly
+   into the popup document, so no Tailwind, no design tokens. Width is fixed at 320px to match
+   Chrome's preferred popup size; height grows with the textarea (resize: vertical). */
+/* Reset. */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -49,6 +53,8 @@ header {
   transition: background 0.2s;
 }
 
+/* Status dot colour map — matches the three setStatus() states in popup.js. Green=connected,
+   amber=setting-up (no Wrapperr tab yet), red=issue (SW unreachable). */
 .dot.connected { background: #22c55e; }
 .dot.setting-up { background: #f59e0b; }
 .dot.issue { background: #ef4444; }

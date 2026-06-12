@@ -1,3 +1,6 @@
+// AI_URLS — canonical landing page per AI. Used both as the initial create-tab URL and as the
+// substring check in ensureTab() (we reload the tab if it has drifted to a different host, e.g.
+// the user clicked a link that took it off-site).
 const AI_URLS = {
   chatgpt:    'https://chatgpt.com',
   claude:     'https://claude.ai',
@@ -35,8 +38,14 @@ async function persistTabMap() {
 }
 
 // pendingRequests: { [requestId]: { resolve, reject, timeoutId } }
+// Reserved for a future request-correlation feature; not actively used by sendToAI today —
+// the await chain inside sendToAI awaits the response inline. Left in so a refactor to a
+// long-running streaming pipeline doesn't need to reintroduce this dict.
 const pendingRequests = {};
 
+// Tab-removed cleanup: if the user closes one of the AI tabs, drop it from tabMap so the next
+// send opens a fresh one instead of trying to reuse the dead id. Awaits tabMapReady so we never
+// race the SW startup load.
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   await tabMapReady;
   let changed = false;
@@ -47,6 +56,12 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 // ensureTab: returns a healthy tab on the AI's site, reusing the tracked tab when possible.
+// Three reuse paths handled here:
+//   1. Tab still alive on the right host → return as is.
+//   2. Tab discarded by Chrome memory pressure → reload + small settle delay.
+//   3. Tab navigated elsewhere → force-back to AI_URLS[ai] + settle delay.
+// All failure paths fall through to a fresh chrome.tabs.create(). The 2s sleep after navigation
+// gives the content scripts time to attach + the AI site's React app time to mount.
 async function ensureTab(ai) {
   await tabMapReady;
   const tabId = tabMap[ai];
@@ -83,6 +98,10 @@ async function ensureTab(ai) {
   return tab.id;
 }
 
+// waitForTabLoad: resolves when the given tab reaches status 'complete'. Handles the race
+// where the tab is already complete before we attach the listener by checking status once up
+// front. Never rejects — a tab that never completes will just hang here until the caller's
+// outer timeout fires.
 function waitForTabLoad(tabId) {
   return new Promise((resolve) => {
     function listener(id, info) {
@@ -185,6 +204,11 @@ async function rereadFromAI(ai) {
   return text;
 }
 
+// pollForResponse: drives the wait-until-AI-finishes loop. Poll every 500ms, treat the answer
+// as "done" once the visible text hasn't changed for STABLE_MS (1.5s) and is distinct from the
+// baseline (so we don't return the user's own prompt or the prior assistant turn). HARD_MS
+// (240s) is the absolute ceiling — exceeded → return whatever we have, even if empty.
+// Baseline is supplied by the content script's pre-inject snapshot of the chat.
 async function pollForResponse(tabId, ai, sentAt, baseline) {
   const POLL_MS = 500;
   const STABLE_MS = 1500;
@@ -234,6 +258,10 @@ async function pollForResponse(tabId, ai, sentAt, baseline) {
   return lastText || 'No response received.';
 }
 
+// Central message router for the SW. Three message types: WRAPPERR_SEND (full send pipeline),
+// WRAPPERR_REREAD (re-scrape only, Compare carousel), WRAPPERR_GET_STATUS (popup heartbeat).
+// All three return true synchronously to keep the response channel open for the async result;
+// dropping the return value would cause sendResponse to be ignored by Chrome.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'WRAPPERR_SEND') {
     // options is optional — per-AI feature toggles ({ feature, intelligence, style }). When
@@ -282,6 +310,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+// pingWrapperrTab: round-trips a WRAPPERR_PING to any open Wrapperr web app tab. Used by the
+// popup status dot. Falls back to false on any error (no tab, content script not loaded, etc.).
 async function pingWrapperrTab() {
   const tabs = await chrome.tabs.query({});
   const target = tabs.find(
@@ -296,6 +326,9 @@ async function pingWrapperrTab() {
   }
 }
 
+// sendToWrapperrTab: fan-out to EVERY open Wrapperr web app tab. Multiple tabs is unusual but
+// supported — the requestId in the message body ensures only the originating tab acts on it.
+// Errors are swallowed per-tab so a single closed/unreachable tab doesn't break the others.
 async function sendToWrapperrTab(data) {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
