@@ -1,10 +1,15 @@
 import type { AIModel } from './types';
 
+// isExtensionActive: probes the global flag set by extension/content-scripts/wrapperr-flag.js
+// when the extension is installed and enabled. SSR-safe (returns false on the server). Used by
+// NoExtensionState to switch the chat surface into "install the extension" mode.
 export function isExtensionActive(): boolean {
   if (typeof window === 'undefined') return false;
   return (window as any).__WRAPPERR_EXTENSION_ACTIVE__ === true;
 }
 
+// Monotonic counter combined with Date.now() to mint per-call requestIds. Lives at module scope
+// so concurrent in-flight sendMessageToAI/rereadFromAI calls never collide on the same id.
 let requestCounter = 0;
 
 // AIOptions — optional per-AI feature toggles forwarded to the content script. The shape mirrors
@@ -19,6 +24,11 @@ export type AIOptions = {
   style?: string;
 };
 
+// sendMessageToAI: fire-and-await round-trip to the extension. Posts WRAPPERR_SEND to the page
+// window (the bridge content script forwards it to the service worker), then listens for the
+// matching WRAPPERR_RESPONSE keyed by requestId. Timeout default of 60s reflects worst-case AI
+// streaming time on slow models; tune per caller. The listener is removed on resolve/reject so
+// repeated calls don't leak event-listener references.
 export function sendMessageToAI(
   ai: AIModel,
   message: string,
