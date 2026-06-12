@@ -6,6 +6,7 @@ import type { Message, AIModel, ChatSummary, Profile, CompareResponse } from '@/
 import { AI_MODELS, MAX_CHATS, SUMMARY_PROMPT } from '@/lib/constants';
 import { isExtensionActive, sendMessageToAI, rereadFromAI } from '@/lib/extension';
 import { loadAIOptions, saveAIOptions, type AIOptionsMap } from '@/lib/aiOptionsStorage';
+import { toWrapperrError, wrapperrError, type WrapperrError } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import ChatWindow from '@/components/layout/ChatWindow';
@@ -70,6 +71,12 @@ export default function Home() {
   // returns {} when window is undefined).
   const [aiOptions, setAiOptions] = useState<AIOptionsMap>(() => loadAIOptions());
   useEffect(() => { saveAIOptions(aiOptions); }, [aiOptions]);
+
+  // pageError: non-message-bound failures (e.g. saveChat upsert RLS rejection, AI-switch
+  // summary relay failure). Surfaced as a dismissable banner above the message list. AI
+  // round-trip failures DO NOT use this — they're anchored to the user prompt that caused them
+  // via message.wrapperrError, so the user sees the failure beside the prompt they sent.
+  const [pageError, setPageError] = useState<WrapperrError | null>(null);
 
   // setAIOption: update one slot for one AI. Pass undefined to clear the slot (e.g. "no tool
   // active"). Used by InputBar via prop-drilling through ChatWindow → ActiveChatState.
@@ -247,6 +254,19 @@ export default function Home() {
 
     if (error) {
       console.error('saveChat upsert error:', error);
+      // Surface to UI as a dismissable banner. Supabase returns its error as a *value* (not a
+      // throw) so a plain try/catch can't see it — we have to forward explicitly. Common cause:
+      // RLS policy mismatch on the chats table (see supabase/schema.sql).
+      setPageError(wrapperrError('PERSISTENCE_SAVE_CHAT', {
+        details: {
+          op: 'upsert chats',
+          chatId,
+          code: (error as { code?: string }).code,
+          hint: (error as { hint?: string }).hint,
+          messageCount: updatedMessages.length,
+        },
+        cause: { message: error.message },
+      }));
       return;
     }
     await loadChats(user.id);
@@ -301,14 +321,17 @@ export default function Home() {
             )
           );
         } catch (err) {
-          const detail = err instanceof Error ? err.message : String(err);
+          // Per-slide WrapperrError. ai is tagged so the Copy block carries provenance for
+          // the dev. We DO NOT setPageError here — Compare deliberately keeps each AI's
+          // failure local to its own slide so a 1/3 failure doesn't blank the other 2.
+          const w = toWrapperrError(err, 'UNKNOWN', { ai });
           setMessages((prev) =>
             prev.map((m) =>
               m.id === compareId && m.responses
                 ? {
                     ...m,
                     responses: m.responses.map((r) =>
-                      r.ai === ai ? { ...r, status: 'error', error: detail } : r
+                      r.ai === ai ? { ...r, status: 'error', error: w } : r
                     ),
                   }
                 : m
@@ -356,14 +379,16 @@ export default function Home() {
         )
       );
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      // Re-read failed (the network buffer + DOM both came up empty, or the tab navigated).
+      // Local to this slide so a failed recheck doesn't blow away the other slides' content.
+      const w = toWrapperrError(err, 'AI_REREAD_NO_TEXT', { ai });
       setMessages((cur) =>
         cur.map((m) =>
           m.id === compareId && m.responses
             ? {
                 ...m,
                 responses: m.responses.map((r) =>
-                  r.ai === ai ? { ...r, status: 'error', error: detail } : r
+                  r.ai === ai ? { ...r, status: 'error', error: w } : r
                 ),
               }
             : m
@@ -446,13 +471,18 @@ export default function Home() {
         console.error('saveChat failed:', e)
       );
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      // Single-AI failure: anchor the WrapperrError to an assistant bubble so the user sees the
+      // structured error right beside their prompt. MessageBubble routes to ErrorDisplay when
+      // message.wrapperrError is set, surfacing stage + hint + Copy details. The content field
+      // is a fallback line for any legacy renderer that ignores wrapperrError.
+      const w = toWrapperrError(err, 'UNKNOWN', { ai: selectedAI });
       const errMessage: Message = {
         id: generateId(),
         role: 'assistant',
-        content: `Something went wrong: ${detail}`,
+        content: `${w.stage} failed: ${w.message}`,
         aiModel: selectedAI,
         timestamp: Date.now(),
+        wrapperrError: w,
       };
       setMessages([...updatedMessages, errMessage]);
     } finally {
@@ -504,8 +534,14 @@ export default function Home() {
           console.error('saveChat failed:', e)
         );
       }
-    } catch {
+    } catch (err) {
+      // Summary relay failed (either the old AI couldn't produce a summary or the new AI
+      // couldn't ingest it). We still switch — the user's intent was to swap, and the chat
+      // history stays visible — but surface the failure in the top banner so they know context
+      // didn't carry over. Copy-details points the dev at which leg failed (the WrapperrError's
+      // ai field is the leg that actually broke).
       setSelectedAI(newAI);
+      setPageError(toWrapperrError(err, 'UNKNOWN'));
     } finally {
       setTransferring(false);
     }
@@ -554,6 +590,8 @@ export default function Home() {
           onRetryCompareSlide={retryCompareSlide}
           aiOptions={aiOptions}
           onAIOptionChange={setAIOption}
+          pageError={pageError}
+          onDismissPageError={() => setPageError(null)}
         />
       </main>
     </div>

@@ -9,6 +9,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import ProviderMark from './ProviderMark';
+import ErrorDisplay from './ErrorDisplay';
 
 interface Props {
   message: Message;
@@ -176,29 +177,38 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
           </div>
         )}
 
-        <div
-          className={`wrapperr-md ${bulletClass}`}
-          style={{ fontSize: 14.5, lineHeight: 1.66 }}
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={{
-              a: ({ href, children }) => (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: aiHue ?? 'var(--text)', textDecoration: 'underline' }}
-                >
-                  {children}
-                </a>
-              ),
-            }}
+        {/* Body: structured error variant takes precedence over markdown. When the prompt
+            round-trip failed at any step (extension absent, tab open failed, applyOptions
+            selector miss, poll timeout, etc.), page.tsx attaches the WrapperrError onto the
+            assistant message instead of a stringified content. ErrorDisplay renders the
+            stage + message + hint and exposes the Copy-details paste block. */}
+        {message.wrapperrError ? (
+          <ErrorDisplay error={message.wrapperrError} variant="bubble" />
+        ) : (
+          <div
+            className={`wrapperr-md ${bulletClass}`}
+            style={{ fontSize: 14.5, lineHeight: 1.66 }}
           >
-            {message.content}
-          </ReactMarkdown>
-        </div>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={{
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: aiHue ?? 'var(--text)', textDecoration: 'underline' }}
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
 
         {/* Action row: copy button. */}
         <div className="flex items-center gap-1 mt-2">

@@ -13,13 +13,33 @@ if (!window.__wrapperrChatGPTLoaded) {
 // strategy based on the element type — textarea uses the React-prototype-setter route, the
 // newer contenteditable composer falls through to the synthetic-paste route.
 async function injectMessage(message) {
+  // Composer location: testid → legacy data-id → contenteditable fallback. If none match the
+  // provider redesigned their composer; surface as a structured WrapperrError so the UI hint
+  // can point straight at this selector chain.
   const input = document.querySelector('#prompt-textarea')
     ?? document.querySelector('textarea[data-id="root"]')
     ?? document.querySelector('div[contenteditable="true"]');
-  if (!input) throw new Error('ChatGPT input not found');
+  if (!input) {
+    throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', {
+      ai: 'chatgpt',
+      details: {
+        selectorsTried: [
+          '#prompt-textarea',
+          'textarea[data-id="root"]',
+          'div[contenteditable="true"]',
+        ],
+        url: location.href,
+      },
+    });
+  }
 
   await wrapperrInjectInput(input, { kind: 'text', text: message });
 
+  // Send button: ChatGPT renames this aggressively (fruitjuice-send-button, send-button, etc.)
+  // so we try four ladders before falling back to Enter. If we miss BOTH the button and the
+  // textarea doesn't fire on Enter (composer in some weird disabled state), the SW will catch
+  // it as AI_POLL_HARD_TIMEOUT downstream — but we still throw here so the user sees a clean
+  // explanation if the click silently no-ops.
   const sendBtn = document.querySelector('[data-testid="send-button"]')
     ?? document.querySelector('button[aria-label="Send prompt"]')
     ?? document.querySelector('button[data-testid="fruitjuice-send-button"]')
@@ -28,7 +48,13 @@ async function injectMessage(message) {
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
   } else {
+    // Last resort — synthetic Enter keydown.
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    if (!sendBtn) {
+      // Don't throw — Enter may still submit; the SW poll will surface it if nothing arrives.
+      // We just log so the dev knows the button selector ladder all missed.
+      console.warn('[wrapperr chatgpt] send button not found across all 4 selectors; relied on Enter fallback');
+    }
   }
 }
 
@@ -536,7 +562,9 @@ if (!window.__wrapperrAIListenerOn) {
           await injectMessage(msg.message);
           sendResponse({ ok: true, baseline });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+          // WrapperrError thrown from injectMessage passes through; anything else is normalised
+          // and tagged with this AI + requestId for the Copy block's provenance.
+          sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'chatgpt', requestId: msg.requestId }) });
         }
       })();
       return true;

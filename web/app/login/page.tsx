@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { wrapperrError, type WrapperrError } from '@/lib/errors';
+import ErrorDisplay from '@/components/chat/ErrorDisplay';
 
 // Mode discriminates which form is rendered — single-page auth surface that swaps content
 // instead of routing. `signin`/`signup` share most of the form; `magic` and `forgot` are
@@ -21,6 +23,11 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // wErr — structured WrapperrError set when a Supabase auth call returns an error. Rendered
+  // via ErrorDisplay with Copy-details so the user can paste straight to Claude / a dev. The
+  // legacy string `error` state is kept in parallel for the small caption inputs that need
+  // short text only.
+  const [wErr, setWErr] = useState<WrapperrError | null>(null);
   const [message, setMessage] = useState('');
 
   // switchMode: change the visible form and clear any stale errors / password fields. Email is
@@ -29,10 +36,21 @@ export default function LoginPage() {
   function switchMode(next: Mode) {
     setMode(next);
     setError('');
+    setWErr(null);
     setPassword('');
     setConfirmPassword('');
     setShowPassword(false);
     setShowConfirm(false);
+  }
+
+  // buildAuthError — translate a Supabase error into a WrapperrError keyed by the auth code
+  // that matches the action. Supabase error objects carry .message, .status, .code on newer
+  // versions; we capture all of them so the Copy block is actionable.
+  function buildAuthError(code: string, sbError: { message?: string; status?: number; code?: string }): WrapperrError {
+    return wrapperrError(code, {
+      details: { supabaseStatus: sbError.status, supabaseCode: sbError.code },
+      cause: { message: sbError.message },
+    });
   }
 
   // Email + password sign-in. On success redirect to app. Common failure: account was created
@@ -50,6 +68,7 @@ export default function LoginPage() {
 
     if (sbError) {
       setError(sbError.message);
+      setWErr(buildAuthError('AUTH_SIGN_IN', sbError));
       setLoading(false);
     } else {
       window.location.href = '/';
@@ -76,6 +95,7 @@ export default function LoginPage() {
 
     if (sbError) {
       setError(sbError.message);
+      setWErr(buildAuthError('AUTH_SIGN_UP', sbError));
       setLoading(false);
     } else {
       setMessage('Check your email to confirm your account, then sign in.');
@@ -97,6 +117,7 @@ export default function LoginPage() {
 
     if (sbError) {
       setError(sbError.message);
+      setWErr(buildAuthError('AUTH_RESET', sbError));
       setLoading(false);
     } else {
       setSent(true);
@@ -118,6 +139,7 @@ export default function LoginPage() {
 
     if (sbError) {
       setError(sbError.message);
+      setWErr(buildAuthError('AUTH_MAGIC_LINK', sbError));
       setLoading(false);
     } else {
       setSent(true);
@@ -214,7 +236,10 @@ export default function LoginPage() {
         ) : mode === 'magic' ? (
           <form onSubmit={handleMagicLink} className="space-y-4">
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" required className={inputClass} />
-            {error && <p className="text-red-400 text-xs">{error}</p>}
+            {wErr && (
+              <div className="mt-2"><ErrorDisplay error={wErr} variant="banner" /></div>
+            )}
+            {error && !wErr && <p className="text-red-400 text-xs">{error}</p>}
             <button type="submit" disabled={loading || !email.trim()} className={btnPrimary}>
               {loading ? 'Sending…' : 'Send magic link'}
             </button>
@@ -227,7 +252,10 @@ export default function LoginPage() {
         ) : mode === 'forgot' ? (
           <form onSubmit={handleForgot} className="space-y-4">
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" required className={inputClass} />
-            {error && <p className="text-red-400 text-xs">{error}</p>}
+            {wErr && (
+              <div className="mt-2"><ErrorDisplay error={wErr} variant="banner" /></div>
+            )}
+            {error && !wErr && <p className="text-red-400 text-xs">{error}</p>}
             <button type="submit" disabled={loading || !email.trim()} className={btnPrimary}>
               {loading ? 'Sending…' : 'Send reset link'}
             </button>
@@ -244,7 +272,10 @@ export default function LoginPage() {
             {mode === 'signup' && (
               <PasswordInput value={confirmPassword} onChange={setConfirmPassword} placeholder="Confirm password" show={showConfirm} onToggle={() => setShowConfirm((s) => !s)} />
             )}
-            {error && <p className="text-red-400 text-xs">{error}</p>}
+            {wErr && (
+              <div className="mt-2"><ErrorDisplay error={wErr} variant="banner" /></div>
+            )}
+            {error && !wErr && <p className="text-red-400 text-xs">{error}</p>}
             <button type="submit" disabled={loading || !email.trim() || !password} className={btnPrimary}>
               {loading ? '…' : mode === 'signin' ? 'Sign in' : 'Sign up'}
             </button>

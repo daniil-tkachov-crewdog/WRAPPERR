@@ -9,7 +9,9 @@ import InputBar from './InputBar';
 import RelayCard from './RelayCard';
 import CompareCard from './CompareCard';
 import CompareSelectorCard from './CompareSelectorCard';
+import ErrorDisplay from './ErrorDisplay';
 import TopBar from '@/components/layout/TopBar';
+import type { WrapperrError } from '@/lib/errors';
 
 interface Props {
   messages: Message[];
@@ -33,6 +35,10 @@ interface Props {
   // Per-AI pill state. See ChatWindow.tsx for the same drilled props.
   aiOptions: AIOptionsMap;
   onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
+  // Top-of-chat error banner. Used for non-message-bound failures (saveChat upsert, etc.); AI
+  // round-trip failures land on the assistant bubble itself via message.wrapperrError.
+  pageError?: WrapperrError | null;
+  onDismissPageError?: () => void;
 }
 
 // ActiveChatState — the live chat view.
@@ -63,6 +69,8 @@ export default function ActiveChatState({
   onRetryCompareSlide,
   aiOptions,
   onAIOptionChange,
+  pageError,
+  onDismissPageError,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [quote, setQuote] = useState<string | null>(null);
@@ -80,6 +88,21 @@ export default function ActiveChatState({
       {/* Messages area — centred 720px column. */}
       <div className="flex-1 overflow-y-auto" style={{ padding: '0 28px' }}>
         <div style={{ maxWidth: 720, margin: '0 auto', padding: '30px 0 18px' }}>
+          {/* pageError banner: dismissable, top-of-thread. Wired for failures that aren't tied
+              to a single prompt (saveChat upsert, etc.). AI round-trip errors land on the
+              assistant bubble itself (see MessageBubble + message.wrapperrError) so they stay
+              anchored to the prompt that caused them. */}
+          {pageError && (
+            <div style={{ marginBottom: 18 }}>
+              <ErrorDisplay
+                error={pageError}
+                variant="banner"
+                onRetry={onDismissPageError}
+                retryLabel="Dismiss"
+              />
+            </div>
+          )}
+
           {messages.length === 0 && !loading && (
             <div className="flex flex-col items-center justify-center text-center" style={{ minHeight: 300 }}>
               <p style={{ fontSize: 22, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
