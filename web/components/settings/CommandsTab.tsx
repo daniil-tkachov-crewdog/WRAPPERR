@@ -1,3 +1,6 @@
+// CommandsTab — static "coming soon" placeholder for the v2 commands feature (saved prompt
+// snippets). The `commands` table already exists in schema.sql with RLS policies, just no UI
+// or wiring yet — surface the create flow here when the feature ships.
 export default function CommandsTab() {
   return (
     <div className="space-y-6 max-w-md">

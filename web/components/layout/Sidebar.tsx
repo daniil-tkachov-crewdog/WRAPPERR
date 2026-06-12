@@ -30,10 +30,14 @@ export default function Sidebar({
   onNewChat,
   isLoggedIn,
 }: Props) {
+  // Routing context. isSettings drives both the gear's active treatment and "bounce back to
+  // the chat surface" when New chat / a recent is clicked from /settings.
   const router = useRouter();
   const pathname = usePathname();
   const isSettings = pathname?.startsWith('/settings');
 
+  // Navigation handlers. handleNewChat bridges /settings → / so the user lands on the chat
+  // surface in the new-thread state instead of seeing onNewChat fire on an unmounted tree.
   function handleSettings() {
     router.push('/settings');
   }

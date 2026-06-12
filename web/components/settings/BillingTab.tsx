@@ -1,3 +1,6 @@
+// BillingTab — static "coming soon" placeholder. Every control is disabled and the wrapper is
+// dimmed at opacity 0.4 so the layout reads as a preview, not as a broken Stripe form. Replace
+// with real Stripe/Subscription integration when paid plans launch.
 export default function BillingTab() {
   return (
     <div className="space-y-6 max-w-md">

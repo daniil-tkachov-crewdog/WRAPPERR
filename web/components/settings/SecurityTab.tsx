@@ -1,3 +1,6 @@
+// SecurityTab — static "coming soon" panel. Cards are rendered dimmed at opacity 0.4 so the
+// layout previews the eventual MFA / password-set UI without any wiring. Swap to real controls
+// when the auth features land.
 export default function SecurityTab() {
   return (
     <div className="space-y-6 max-w-md">

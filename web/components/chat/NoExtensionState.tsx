@@ -1,7 +1,12 @@
+// NoExtensionState — full-pane prompt shown when isExtensionActive() returns false. Two blocks:
+// the install CTA card, and an amber warning about being logged into the AI sites in Chrome.
+// The "Add to Chrome" link is a placeholder href="#" — wire it to the real Web Store URL when
+// the extension is published.
 export default function NoExtensionState() {
   return (
     <div className="flex flex-col items-center justify-center h-full px-6">
       <div className="w-full max-w-sm space-y-4">
+        {/* Install CTA card. */}
         <div className="bg-surface border border-border rounded-2xl p-8 text-center space-y-5">
           <div>
             <h2 className="text-lg font-semibold text-white mb-2">
@@ -26,6 +31,9 @@ export default function NoExtensionState() {
           </a>
         </div>
 
+        {/* Amber warning: requires Chrome + AI accounts already signed in for content scripts
+            to actually capture responses. Without this, the extension is technically active
+            but every send fails because the AI tab is logged out. */}
         <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3">
           <span className="text-amber-400 mt-0.5 shrink-0">⚠</span>
           <p className="text-amber-300 text-xs leading-relaxed">

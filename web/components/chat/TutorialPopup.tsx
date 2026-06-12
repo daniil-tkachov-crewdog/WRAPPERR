@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+// SLIDES — onboarding deck content. Plain content array so copy edits don't need a code review
+// of the carousel logic. Add/remove entries freely; the dot-pager and prev/next bounds adapt.
 const SLIDES = [
   {
     title: 'What is Wrapperr?',
@@ -17,10 +19,17 @@ const SLIDES = [
   },
 ];
 
+// TutorialPopup — three-slide onboarding carousel, drag-to-swipe + arrow buttons + dot pager.
+// Used by NotLoggedInState (dormant) and any future first-run surface. Drag threshold is 40px;
+// anything below that is treated as a click.
 export default function TutorialPopup() {
+  // Carousel state. `index` is the current slide; `dragStart` is the X coord captured on
+  // mouse/touch down — null when not dragging.
   const [index, setIndex] = useState(0);
   const [dragStart, setDragStart] = useState<number | null>(null);
 
+  // Navigation handlers. prev/next are clamped to the slide bounds so the buttons can stay
+  // mounted (we hide them via disabled state rather than conditional render).
   function prev() {
     setIndex((i) => Math.max(0, i - 1));
   }
@@ -29,6 +38,8 @@ export default function TutorialPopup() {
     setIndex((i) => Math.min(SLIDES.length - 1, i + 1));
   }
 
+  // Drag handlers. onDragEnd compares against the recorded start X — positive delta = swiped
+  // left = next slide. Threshold 40px tuned to be lenient enough for trackpad flicks.
   function onDragStart(x: number) {
     setDragStart(x);
   }

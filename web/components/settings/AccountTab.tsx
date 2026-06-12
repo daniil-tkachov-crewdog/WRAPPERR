@@ -12,13 +12,19 @@ interface Props {
   onProfileUpdate: (updated: Partial<Profile>) => void;
 }
 
+// AccountTab — name editor + read-only email + delete-account flow. Email is intentionally
+// read-only because Supabase email changes need a verification round-trip we don't surface yet.
 export default function AccountTab({ user, profile, onProfileUpdate }: Props) {
+  // Local form + confirm state. `showDeleteConfirm` gates the destructive button behind a
+  // two-step click so the action can't happen on a stray tap.
   const router = useRouter();
   const [name, setName] = useState(profile.name);
   const [savingName, setSavingName] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // handleSaveName: persists the name field. Triggered on blur OR the inline Save button.
+  // No-op when the value hasn't actually changed so blur doesn't spam the DB on every refocus.
   async function handleSaveName() {
     if (name === profile.name) return;
     setSavingName(true);
@@ -31,6 +37,9 @@ export default function AccountTab({ user, profile, onProfileUpdate }: Props) {
     setSavingName(false);
   }
 
+  // handleDeleteAccount: invokes the SECURITY DEFINER delete_user() RPC defined in schema.sql
+  // (deletes the auth.users row → cascades to profiles/chats/commands), signs out, then bounces
+  // to /login. Hard-redirect via router.push works because the session is already torn down.
   async function handleDeleteAccount() {
     setDeleting(true);
     const supabase = createClient();

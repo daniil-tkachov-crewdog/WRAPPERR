@@ -10,11 +10,19 @@ interface Props {
   onProfileUpdate: (updated: Partial<Profile>) => void;
 }
 
+// GeneralTab — two-field settings panel (appearance + default AI). Edits stay local until the
+// Save button is pressed; `isDirty` derived below drives the button's visibility so users get a
+// natural "you have unsaved changes" affordance.
 export default function GeneralTab({ profile, onProfileUpdate }: Props) {
+  // Local form state seeded from the incoming profile. We do NOT re-sync on profile prop change
+  // — by design — so an outside update wouldn't blow away pending edits.
   const [saving, setSaving] = useState(false);
   const [appearance, setAppearance] = useState<AppearanceMode>(profile.appearance);
   const [defaultAI, setDefaultAI] = useState<AIModel>(profile.default_ai);
 
+  // handleSave: persists to Supabase, then tells the parent so its cached profile stays in sync
+  // without needing a refetch. No error UI yet — failures fall through silently; revisit if
+  // users start reporting "save did nothing".
   async function handleSave() {
     setSaving(true);
     const supabase = createClient();

@@ -10,9 +10,17 @@ interface Props {
   onChatDeleted: (id: string) => void;
 }
 
+// MemoryTab — surface for managing the MAX_CHATS-capped saved chat list. Receives the chat
+// summaries from the parent and tells it back when a row is deleted (parent does optimistic
+// local removal; no refetch).
 export default function MemoryTab({ chats, onChatDeleted }: Props) {
+  // deletingId pins the row whose Delete is in flight so we can show "Deleting…" and disable
+  // double-clicks. Cleared once the DB delete returns.
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // handleDelete: deletes the chat row in Supabase, then bubbles the id up so the sidebar
+  // list re-renders. No confirm modal here — rows can be deleted with one click; reconsider
+  // if accidental deletions become a complaint.
   async function handleDelete(id: string) {
     setDeletingId(id);
     const supabase = createClient();
