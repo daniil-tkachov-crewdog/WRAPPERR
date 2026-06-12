@@ -23,7 +23,7 @@ if (!window.__wrapperrPerplexityInited) {
       ?? document.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
       ?? document.querySelector('div[contenteditable="true"][role="textbox"]');
     let input = findInput();
-    if (!input) throw new Error('Perplexity input not found');
+    if (!input) throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', { ai: 'perplexity', details: { url: location.href, selectorsTried: ['#ask-input', 'div[contenteditable="true"][data-lexical-editor="true"]', 'div[contenteditable="true"][role="textbox"]'] } });
 
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const lines = message.split('\n');
@@ -94,7 +94,7 @@ if (!window.__wrapperrPerplexityInited) {
       const b = getSendBtn(); if (b) { b.click(); return; }
     }
 
-    throw new Error('Perplexity: Send never enabled after injecting');
+    throw wrapperrError('AI_INJECT_SUBMIT_FAILED', { ai: 'perplexity', details: { reason: 'Send button never enabled across 5 attempts × (15×100ms poll)' } });
   }
 
   // perplexityAnswerEl: locate the latest rendered answer container.
@@ -288,7 +288,7 @@ if (!window.__wrapperrPerplexityInited) {
             await injectMessage(msg.message);
             sendResponse({ ok: true, baseline });
           } catch (err) {
-            sendResponse({ ok: false, error: err.message });
+            sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'perplexity', requestId: msg.requestId }) });
           }
         })();
         return true;

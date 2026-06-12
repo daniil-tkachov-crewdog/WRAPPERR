@@ -3,6 +3,7 @@
 import type { User } from '@supabase/supabase-js';
 import type { Message, AIModel } from '@/lib/types';
 import type { AIOptionsMap } from '@/lib/aiOptionsStorage';
+import type { WrapperrError } from '@/lib/errors';
 import NoExtensionState from '@/components/chat/NoExtensionState';
 import ActiveChatState from '@/components/chat/ActiveChatState';
 
@@ -38,6 +39,11 @@ interface Props {
   // time. See web/lib/aiFeatures.ts + web/lib/aiOptionsStorage.ts.
   aiOptions: AIOptionsMap;
   onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
+  // pageError: non-message-bound failures (saveChat upsert, transient extension issues) so the
+  // chat thread itself stays clean. Dismissable. AI-flow failures are anchored to the prompt
+  // bubble that caused them (see message.wrapperrError), not here.
+  pageError?: WrapperrError | null;
+  onDismissPageError?: () => void;
 }
 
 export default function ChatWindow({
@@ -61,6 +67,8 @@ export default function ChatWindow({
   onRetryCompareSlide,
   aiOptions,
   onAIOptionChange,
+  pageError,
+  onDismissPageError,
 }: Props) {
   // Extension-not-installed state: the chat UI is fully blocked because every message has to be
   // delivered through the extension's content scripts. The composer placeholder below mirrors
@@ -119,6 +127,8 @@ export default function ChatWindow({
         onRetryCompareSlide={onRetryCompareSlide}
         aiOptions={aiOptions}
         onAIOptionChange={onAIOptionChange}
+        pageError={pageError}
+        onDismissPageError={onDismissPageError}
       />
     </div>
   );

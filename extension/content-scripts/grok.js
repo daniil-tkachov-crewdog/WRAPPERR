@@ -18,7 +18,7 @@ async function injectMessage(message) {
   const input = document.querySelector('div[data-testid="chat-input"] div[contenteditable="true"]')
     ?? document.querySelector('.tiptap.ProseMirror[contenteditable="true"]')
     ?? document.querySelector('div[contenteditable="true"][translate="no"]');
-  if (!input) throw new Error('Grok input not found');
+  if (!input) throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', { ai: 'grok', details: { url: location.href, selectorsTried: ['div[data-testid="chat-input"] div[contenteditable="true"]', '.tiptap.ProseMirror[contenteditable="true"]', 'div[contenteditable="true"][translate="no"]'] } });
 
   await wrapperrInjectInput(input, { kind: 'text', text: message });
 
@@ -395,7 +395,7 @@ if (!window.__wrapperrAIListenerOn) {
           await injectMessage(msg.message);
           sendResponse({ ok: true, baseline });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+          sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'grok', requestId: msg.requestId }) });
         }
       })();
       return true;

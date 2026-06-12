@@ -13,7 +13,7 @@ async function injectMessage(message) {
     ?? document.querySelector('textarea[placeholder*="DSeek"]')
     ?? document.querySelector('textarea[placeholder*="Message"]')
     ?? document.querySelector('textarea');
-  if (!input) throw new Error('DeepSeek input not found');
+  if (!input) throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', { ai: 'deepseek', details: { url: location.href, selectorsTried: ['textarea[placeholder="Message DSeek"]', 'textarea[name="search"]', 'textarea[placeholder*="DSeek"]', 'textarea[placeholder*="Message"]', 'textarea'] } });
 
   await wrapperrInjectInput(input, { kind: 'text', text: message });
 
@@ -92,7 +92,9 @@ if (!window.__wrapperrAIListenerOn) {
           await injectMessage(msg.message);
           sendResponse({ ok: true, baseline });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+          // Structured WrapperrError preserves the stage / hint registry path; legacy throws
+          // get wrapped as AI_INJECT_INPUT_NOT_FOUND with the original message as `cause`.
+          sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'deepseek', requestId: msg.requestId }) });
         }
       })();
       return true;

@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import ProviderMark from './ProviderMark';
+import ErrorDisplay from './ErrorDisplay';
 
 interface Props {
   message: Message;
@@ -141,36 +142,48 @@ export default function CompareCard({ message, onRetry }: Props) {
           )}
 
           {active && active.status === 'error' && (
-            <div
-              style={{
-                background: 'rgba(239, 110, 110, 0.08)',
-                border: '1px solid rgba(239, 110, 110, 0.35)',
-                borderRadius: 12,
-                padding: '12px 14px',
-                color: '#ef9a9a',
-                fontSize: 13,
-                lineHeight: 1.55,
-              }}
-            >
-              <div style={{ marginBottom: 8 }}>
-                <strong style={{ color: '#ef6e6e' }}>{activeMeta?.label ?? active.ai}</strong>{' '}
-                failed: {active.error || 'unknown error'}
-              </div>
-              <button
-                onClick={() => onRetry(message.id, active.ai)}
+            // Structured WrapperrError takes precedence — full stage / hint / Copy details via
+            // ErrorDisplay. Legacy string errors (older in-memory chats from before the
+            // overhaul) render with a minimal fallback card so they still surface.
+            typeof active.error === 'object' && active.error !== null ? (
+              <ErrorDisplay
+                error={active.error}
+                variant="banner"
+                onRetry={() => onRetry(message.id, active.ai)}
+                retryLabel="Re-check"
+              />
+            ) : (
+              <div
                 style={{
-                  background: 'transparent',
-                  border: '1px solid rgba(239, 110, 110, 0.5)',
+                  background: 'rgba(239, 110, 110, 0.08)',
+                  border: '1px solid rgba(239, 110, 110, 0.35)',
+                  borderRadius: 12,
+                  padding: '12px 14px',
                   color: '#ef9a9a',
-                  borderRadius: 8,
-                  padding: '5px 11px',
-                  fontSize: 12,
-                  cursor: 'pointer',
+                  fontSize: 13,
+                  lineHeight: 1.55,
                 }}
               >
-                Retry
-              </button>
-            </div>
+                <div style={{ marginBottom: 8 }}>
+                  <strong style={{ color: '#ef6e6e' }}>{activeMeta?.label ?? active.ai}</strong>{' '}
+                  failed: {typeof active.error === 'string' ? active.error : 'unknown error'}
+                </div>
+                <button
+                  onClick={() => onRetry(message.id, active.ai)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid rgba(239, 110, 110, 0.5)',
+                    color: '#ef9a9a',
+                    borderRadius: 8,
+                    padding: '5px 11px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )
           )}
 
           {active && active.status === 'done' && (

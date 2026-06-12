@@ -8,7 +8,7 @@ async function injectMessage(message) {
     ?? document.querySelector('div[contenteditable="true"].ql-editor')
     ?? document.querySelector('[contenteditable="true"][data-placeholder]')
     ?? document.querySelector('[contenteditable="true"]');
-  if (!input) throw new Error('Gemini input not found');
+  if (!input) throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', { ai: 'gemini', details: { url: location.href, selectorsTried: ['rich-textarea .ql-editor', 'div[contenteditable="true"].ql-editor', '[contenteditable="true"][data-placeholder]', '[contenteditable="true"]'] } });
 
   await wrapperrInjectInput(input, { kind: 'text', text: message });
 
@@ -579,7 +579,7 @@ if (!window.__wrapperrAIListenerOn) {
           await injectMessage(msg.message);
           sendResponse({ ok: true, baseline });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+          sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'gemini', requestId: msg.requestId }) });
         }
       })();
       return true;

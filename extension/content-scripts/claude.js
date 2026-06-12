@@ -25,7 +25,7 @@ async function injectMessage(message) {
     ?? document.querySelector('div[contenteditable="true"].ProseMirror')
     ?? document.querySelector('div[contenteditable="true"][aria-label*="prompt"]')
     ?? document.querySelector('div[contenteditable="true"]');
-  if (!input) throw new Error('Claude input not found');
+  if (!input) throw wrapperrError('AI_INJECT_INPUT_NOT_FOUND', { ai: 'claude', details: { url: location.href, selectorsTried: ['div[contenteditable="true"][data-testid="chat-input"]', 'div[contenteditable="true"].ProseMirror', 'div[contenteditable="true"][aria-label*="prompt"]', 'div[contenteditable="true"]'] } });
 
   await wrapperrInjectInput(input, { kind: 'text', text: message, strategy: 'contenteditable' });
 
@@ -789,7 +789,7 @@ if (!window.__wrapperrAIListenerOn) {
           await injectMessage(msg.message);
           sendResponse({ ok: true, baseline });
         } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+          sendResponse({ ok: false, error: toWrapperrError(err, 'AI_INJECT_INPUT_NOT_FOUND', { ai: 'claude', requestId: msg.requestId }) });
         }
       })();
       return true;
