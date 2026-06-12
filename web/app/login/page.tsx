@@ -3,8 +3,14 @@
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
+// Mode discriminates which form is rendered — single-page auth surface that swaps content
+// instead of routing. `signin`/`signup` share most of the form; `magic` and `forgot` are
+// email-only flows.
 type Mode = 'signin' | 'signup' | 'magic' | 'forgot';
 
+// LoginPage — entry point for unauthenticated users. Drives all four auth flows from one
+// component to keep the visual treatment consistent (the same shell, the same form classes).
+// Successful sign-in does a hard navigation to "/" so middleware can pick up the new cookies.
 export default function LoginPage() {
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
@@ -17,6 +23,9 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // switchMode: change the visible form and clear any stale errors / password fields. Email is
+  // intentionally preserved across modes — users typing their email then clicking "Forgot
+  // password?" shouldn't have to re-type it.
   function switchMode(next: Mode) {
     setMode(next);
     setError('');
@@ -116,6 +125,8 @@ export default function LoginPage() {
     }
   }
 
+  // Shared Tailwind class strings. Kept inline rather than extracted to a util so the visual
+  // tokens stay co-located with the only page that uses them.
   const inputClass =
     'w-full bg-surface border border-border rounded-lg px-4 py-3 text-white placeholder-muted text-sm outline-none focus:border-white/30 transition-colors';
   const btnPrimary =
@@ -135,6 +146,10 @@ export default function LoginPage() {
     </svg>
   );
 
+  // PasswordInput — local subcomponent used for both Password and Confirm Password fields.
+  // Defined inside the component so it can close over `inputClass` without prop drilling. NB:
+  // because it's defined inside, React treats it as a new component each render — fine here at
+  // this scale, but don't add useState inside it without lifting it out first.
   function PasswordInput({
     value, onChange, placeholder, show, onToggle,
   }: {
@@ -166,6 +181,9 @@ export default function LoginPage() {
     );
   }
 
+  // Render: cascading ternary picks one of five views — info message, "check your email"
+  // success, magic-link form, forgot-password form, or the signin/signup combined form. Order
+  // matters: `message` and `sent` must come first so they always win over the form fallback.
   return (
     <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-sm">

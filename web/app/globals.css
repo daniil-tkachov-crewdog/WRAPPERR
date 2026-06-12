@@ -29,6 +29,8 @@
   --p-perplexity: oklch(0.74 0.09 200);
 }
 
+/* Global reset. Tailwind base already does most of this, but the explicit margin/padding wipe
+   makes sure no UA stylesheet (mobile Safari, etc.) leaks default spacing into the app shell. */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -44,6 +46,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Custom thin scrollbar treatment for the whole app. WebKit-only — Firefox uses the OS native
+   scrollbar (acceptable). Track is transparent so it disappears against the dark canvas. */
 ::-webkit-scrollbar {
   width: 4px;
 }
@@ -69,6 +73,9 @@ textarea {
   resize: none;
 }
 
+/* Utility: .scrollbar-hide removes the scrollbar entirely on overflow containers (used inside
+   horizontal carousels — Compare slides, model picker). The element still scrolls; the chrome
+   just isn't drawn. */
 @layer utilities {
   .scrollbar-hide::-webkit-scrollbar {
     display: none;

@@ -10,15 +10,26 @@ import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
 import ChatWindow from '@/components/layout/ChatWindow';
 
+// generateId: lightweight client-side id minter for messages & chats. Collision-safe enough at
+// our volumes (random base36 + timestamp). Don't use as a primary key — Supabase generates real
+// UUIDs server-side; these are only for in-memory message arrays.
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+// chatNameFromMessage: derives the sidebar label from the first user message — first 5 words.
+// Cheap heuristic; intentionally not LLM-summarised to avoid an extra round trip on first send.
 function chatNameFromMessage(text: string): string {
   return text.trim().split(/\s+/).slice(0, 5).join(' ');
 }
 
+// Home — the single page. Owns ALL app-level state: auth/profile, chat list & active chat,
+// selected AI, Compare-mode state, per-AI feature options, loading flags. Everything else is a
+// presentational component that receives state via props. Keep new state local to children
+// unless it has to cross-cut here.
 export default function Home() {
+  // Auth + profile state. `user` is null until getSession() resolves; gate on `authLoading`
+  // to decide whether to show the spinner vs. the logged-out UI.
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   // authLoading must start true — the page must not render as logged-out while getSession() is
@@ -26,6 +37,10 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [extensionActive, setExtensionActive] = useState(false);
 
+  // Chat state. `chats` is the sidebar list (lightweight), `messages` is the active thread.
+  // `loading` is the per-turn spinner; `transferring` is the dedicated state for the cross-AI
+  // summary relay (handleSwitchAI) so the UI can show a different visual while it runs.
+  // `timeoutMs` is per-call extension timeout, surfaced in Settings → General.
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -71,7 +86,9 @@ export default function Home() {
     });
   }
 
-  // Auth init
+  // Auth init effect: probes the session once, then subscribes for changes. Loads profile +
+  // chat list whenever a user appears. authLoading must flip false BEFORE the awaits run so a
+  // slow Supabase reply doesn't pin the fullscreen spinner — see comment above setAuthLoading.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const supabase = createClient();
@@ -103,7 +120,9 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Extension detection
+  // Extension detection: polls the window flag every 2s. Polling instead of one-shot because
+  // the user can install/enable the extension mid-session; the chat surface must react. Interval
+  // is short enough to feel responsive and cheap enough to ignore the cost.
   useEffect(() => {
     function check() {
       setExtensionActive(isExtensionActive());
@@ -113,6 +132,9 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
 
+  // loadProfile: fetches the row and also seeds selectedAI from the user's default. Single-row
+  // fetch — if the row is missing (shouldn't happen thanks to the handle_new_user trigger) we
+  // leave selectedAI at its initial default.
   async function loadProfile(userId: string) {
     const supabase = createClient();
     const { data } = await supabase
@@ -126,6 +148,8 @@ export default function Home() {
     }
   }
 
+  // loadChats: capped to MAX_CHATS via LIMIT so we don't blow up the sidebar if the cap was
+  // ever raised. ORDER BY updated_at matches the sidebar render order.
   async function loadChats(userId: string) {
     const supabase = createClient();
     const { data } = await supabase
@@ -137,6 +161,9 @@ export default function Home() {
     if (data) setChats(data as ChatSummary[]);
   }
 
+  // handleSelectChat: full-thread fetch on click. Cheap because we limit history to ~25 chats
+  // and message JSONB is denormalised. Sets selectedAI so the composer + tints match the chat's
+  // last-used AI.
   async function handleSelectChat(id: string) {
     const supabase = createClient();
     setCurrentChatId(id);
@@ -151,6 +178,9 @@ export default function Home() {
     }
   }
 
+  // handleNewChat: clears the active thread + all per-thread flags. Note: only the chat ID is
+  // cleared; the actual DB row is created lazily on first send (see handleSendMessage). So
+  // "New Chat" with no message sent leaves zero DB footprint.
   function handleNewChat() {
     setCurrentChatId(null);
     setMessages([]);
@@ -342,6 +372,10 @@ export default function Home() {
     }
   }
 
+  // handleSendMessage: the main send pipeline for single-AI turns. Two branches early — the
+  // extension must be active (otherwise the UI is already gated to "install extension"), and
+  // compareMode short-circuits into runCompareTurn. Everything below the guards is the
+  // optimistic-update + extension round-trip + chat upsert flow.
   async function handleSendMessage(text: string) {
     if (!extensionActive) return;
 
@@ -365,7 +399,9 @@ export default function Home() {
     setMessages(updatedMessages);
     setLoading(true);
 
-    // Create chat ID on first message
+    // First-message branch: mint an id and a derived name, enforce MAX_CHATS. The cap message is
+    // injected as an assistant turn (rather than a toast) so the conversation context survives
+    // the warning visually.
     let chatId = currentChatId;
     let chatName = chats.find((c) => c.id === chatId)?.name ?? '';
 
@@ -424,6 +460,10 @@ export default function Home() {
     }
   }
 
+  // handleSwitchAI: cross-AI summary relay. Asks the current AI to summarise the conversation,
+  // then feeds that summary as context to the new AI. The transferring flag drives a distinct
+  // visual so users see this is more involved than a normal turn. On any failure we still
+  // switch the active AI so the user isn't stuck — they just lose the context bridge.
   async function handleSwitchAI(newAI: AIModel) {
     // Defensive: while Compare is on the UI hides the model selector, but if any code path
     // tries to switch the active single-AI we silently no-op. Compare must never trigger the
@@ -471,6 +511,8 @@ export default function Home() {
     }
   }
 
+  // Initial render gate: while we don't yet know whether the user is logged in, show a single
+  // spinner. Avoids the flash-of-logged-out content that would otherwise happen on hard refresh.
   if (authLoading) {
     return (
       <div className="flex items-center justify-center h-screen bg-bg">
@@ -479,6 +521,8 @@ export default function Home() {
     );
   }
 
+  // Layout shell: fixed-height row split into Sidebar + ChatWindow. ChatWindow consumes every
+  // piece of state through props — it has no Supabase/extension access of its own.
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
       <Sidebar

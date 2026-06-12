@@ -37,6 +37,9 @@ const PLACEHOLDER_PROFILE: Profile = {
   appearance: 'dark',
 };
 
+// SettingsContent — actual page body, wrapped in Suspense by the default export so
+// useSearchParams() doesn't fight Next's SSG export. Each TAB renders a separate component;
+// this file is mostly the shell + the auth/profile bootstrap with placeholder fallback.
 function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -111,10 +114,14 @@ function SettingsContent() {
     });
   }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // handleTabChange: updates the URL ?tab= param. Drives the activeTab via useSearchParams so
+  // the back button cycles through tabs naturally and tabs are deep-linkable.
   function handleTabChange(tab: Tab) {
     router.push(`/settings?tab=${tab}`);
   }
 
+  // handleChatDeleted: called by MemoryTab after a successful DB delete. Local-only optimistic
+  // removal — no re-fetch needed because the row is already gone server-side.
   function handleChatDeleted(id: string) {
     setChats((prev) => prev.filter((c) => c.id !== id));
   }
@@ -208,6 +215,8 @@ function SettingsContent() {
   );
 }
 
+// Default export wraps the page in Suspense so useSearchParams() can resolve during static
+// rendering without throwing.
 export default function SettingsPage() {
   return (
     <Suspense fallback={

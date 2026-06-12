@@ -8,6 +8,9 @@ import { createClient } from '@/lib/supabase/client';
 // authenticated at this point. We just call updateUser({ password }) to set the new password.
 // Do not add an auth guard here — the session may take a moment to propagate to the client.
 export default function ResetPasswordPage() {
+  // Form state. `done` triggers the post-submit "success" view + delayed redirect; everything
+  // else is plain controlled-input state. Errors are kept as a string so we can render them
+  // inline; null/empty hides the message.
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -16,6 +19,9 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
 
+  // Submit handler: validates password match locally, then calls supabase.auth.updateUser. On
+  // success it shows the confirmation view and hard-redirects to "/" after 2s — full reload so
+  // the new session cookies are picked up by middleware on the next request.
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (password !== confirm) {
@@ -37,9 +43,13 @@ export default function ResetPasswordPage() {
     }
   }
 
+  // Shared Tailwind input class — kept inline (not extracted) because it's only used twice in
+  // this single file. `pr-11` reserves space for the show/hide eye button.
   const inputClass =
     'w-full bg-surface border border-border rounded-lg px-4 py-3 text-white placeholder-muted text-sm outline-none focus:border-white/30 transition-colors pr-11';
 
+  // Inline SVG icons for the password show/hide toggle. Kept local to avoid pulling in an icon
+  // library for two glyphs.
   const EyeIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -53,6 +63,8 @@ export default function ResetPasswordPage() {
     </svg>
   );
 
+  // Render: two branches — the "done" success state or the form. Wrapped in a vertically
+  // centered shell that matches the /login visual treatment so the flow feels continuous.
   return (
     <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-sm">
