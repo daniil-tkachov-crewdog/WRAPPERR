@@ -27,19 +27,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'account', label: 'Account' },
 ];
 
-// PLACEHOLDER_PROFILE: dummy Profile fed to tab components when there's no real Supabase
-// session. Mirrors the shape of a real Profile row so existing tabs render fields without
-// crashing. Used together with placeholderMode, which freezes all inputs via a wrapper.
-const PLACEHOLDER_PROFILE: Profile = {
-  id: 'placeholder',
-  name: '',
-  default_ai: 'chatgpt',
-  appearance: 'dark',
-};
-
 // SettingsContent — actual page body, wrapped in Suspense by the default export so
 // useSearchParams() doesn't fight Next's SSG export. Each TAB renders a separate component;
-// this file is mostly the shell + the auth/profile bootstrap with placeholder fallback.
+// this file is mostly the shell + the auth/profile bootstrap.
 function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -47,21 +37,21 @@ function SettingsContent() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  // placeholderMode: true when we couldn't establish a real Supabase session (or the profile
-  // fetch failed). UI still renders fully but all inputs are visually frozen via a
-  // pointer-events-none / reduced-opacity wrapper around the tab content. Flip this off once
-  // Supabase auth and RLS issues are sorted, and the page will go back to fully interactive.
-  const [placeholderMode, setPlaceholderMode] = useState(false);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
-  // Session + data bootstrap. Previously bailed to /login on any auth failure; now we instead
-  // drop into placeholderMode so the user can still navigate the Settings UI even when
-  // Supabase is misbehaving (the original reason this page was "disabled").
+  // Session + data bootstrap. If there's no session OR the profile/chats fetch fails, we
+  // redirect to /login — the page is auth-gated and should never render with stale or fake
+  // data. Errors are logged so we can see them in the dev console instead of being silently
+  // masked. The handle_new_user DB trigger guarantees a profiles row exists for every auth
+  // user, so a missing profile is a real schema/RLS issue worth surfacing.
   useEffect(() => {
     const supabase = createClient();
 
     async function getSessionWithRetry() {
+      // Dev-mode quirk: parallel HMR/prefetch requests race for the navigator auth lock and
+      // one of them gets a "lock stolen" error. Retry once after a brief wait — the lock is
+      // released as soon as the winning request finishes its refresh.
       const result = await supabase.auth.getSession();
       if (result.error?.message?.includes('Lock') && result.error.message.includes('stolen')) {
         await new Promise((r) => setTimeout(r, 500));
@@ -71,12 +61,13 @@ function SettingsContent() {
     }
 
     getSessionWithRetry().then(async ({ data: { session }, error: sessionError }) => {
-      if (sessionError || !session?.user) {
-        // No real session — render the page in placeholder mode with a dummy profile so the
-        // tab components still mount. No redirects, no Supabase writes.
-        setProfile(PLACEHOLDER_PROFILE);
-        setPlaceholderMode(true);
-        setLoading(false);
+      if (sessionError) {
+        console.error('Settings: getSession failed:', sessionError);
+        router.replace('/login');
+        return;
+      }
+      if (!session?.user) {
+        router.replace('/login');
         return;
       }
       setUser(session.user);
@@ -86,42 +77,42 @@ function SettingsContent() {
         .select('*')
         .eq('id', session.user.id)
         .maybeSingle();
-      if (profileError || !profileData) {
-        // Profile fetch broken (RLS / schema / etc.) — fall back to placeholder rather than
-        // showing a red error banner.
-        setProfile(PLACEHOLDER_PROFILE);
-        setPlaceholderMode(true);
+      if (profileError) {
+        console.error('Settings: profile fetch failed:', profileError);
+        setLoading(false);
+        return;
+      }
+      if (!profileData) {
+        // Trigger should have created this row on signup — missing means schema is out of sync.
+        console.error('Settings: no profile row for user', session.user.id);
         setLoading(false);
         return;
       }
       setProfile(profileData as Profile);
 
-      const { data: chatData } = await supabase
+      const { data: chatData, error: chatError } = await supabase
         .from('chats')
         .select('id, name, ai_model, updated_at')
         .eq('user_id', session.user.id)
         .order('updated_at', { ascending: false })
         .limit(MAX_CHATS);
-      if (chatData) setChats(chatData as ChatSummary[]);
+      if (chatError) {
+        console.error('Settings: chats fetch failed:', chatError);
+      } else if (chatData) {
+        setChats(chatData as ChatSummary[]);
+      }
 
       setLoading(false);
-    }).catch(() => {
-      // Unexpected throw — same fallback path. The page must never be inaccessible just
-      // because Supabase is unreachable.
-      setProfile(PLACEHOLDER_PROFILE);
-      setPlaceholderMode(true);
+    }).catch((err) => {
+      console.error('Settings: unexpected bootstrap error:', err);
       setLoading(false);
     });
-  }, [router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [router]);
 
-  // handleTabChange: updates the URL ?tab= param. Drives the activeTab via useSearchParams so
-  // the back button cycles through tabs naturally and tabs are deep-linkable.
   function handleTabChange(tab: Tab) {
     router.push(`/settings?tab=${tab}`);
   }
 
-  // handleChatDeleted: called by MemoryTab after a successful DB delete. Local-only optimistic
-  // removal — no re-fetch needed because the row is already gone server-side.
   function handleChatDeleted(id: string) {
     setChats((prev) => prev.filter((c) => c.id !== id));
   }
@@ -134,8 +125,15 @@ function SettingsContent() {
     );
   }
 
-  // effectiveProfile: in placeholder mode we still need a Profile-shaped object for the tabs.
-  const effectiveProfile = profile ?? PLACEHOLDER_PROFILE;
+  // After loading, if we still have no profile something broke (logged above). Show a minimal
+  // error rather than crashing tabs that assume profile is non-null.
+  if (!profile || !user) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-bg text-white text-sm">
+        Couldn&apos;t load your account. Check the console and try refreshing.
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
@@ -168,55 +166,33 @@ function SettingsContent() {
           ))}
         </div>
 
-        {/* Tab content area. In placeholderMode we wrap the content in a non-interactive,
-            dimmed container and show a banner explaining why nothing reacts. */}
+        {/* Tab content area */}
         <div className="flex-1 overflow-y-auto p-8">
-          {placeholderMode && (
-            <div className="mb-6 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300/90 max-w-2xl">
-              Settings are currently shown as read-only placeholders while we resolve Supabase
-              auth and storage issues. Fields and tabs are visible for layout reference, but
-              edits won&apos;t persist.
-            </div>
+          {activeTab === 'general' && (
+            <GeneralTab
+              profile={profile}
+              onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
+            />
           )}
-
-          <div
-            className={
-              placeholderMode
-                ? 'pointer-events-none opacity-60 select-none'
-                : ''
-            }
-            aria-disabled={placeholderMode}
-          >
-            {activeTab === 'general' && (
-              <GeneralTab
-                profile={effectiveProfile}
-                onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
-              />
-            )}
-            {activeTab === 'commands' && <CommandsTab />}
-            {activeTab === 'memory' && (
-              <MemoryTab chats={chats} onChatDeleted={handleChatDeleted} />
-            )}
-            {activeTab === 'security' && <SecurityTab />}
-            {activeTab === 'billing' && <BillingTab />}
-            {activeTab === 'account' && (
-              // AccountTab needs a real user object (email, id) to render. In placeholder mode
-              // we synthesise a minimal stub so the tab still mounts with empty values.
-              <AccountTab
-                user={user ?? ({ id: 'placeholder', email: 'placeholder@example.com' } as User)}
-                profile={effectiveProfile}
-                onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
-              />
-            )}
-          </div>
+          {activeTab === 'commands' && <CommandsTab />}
+          {activeTab === 'memory' && (
+            <MemoryTab chats={chats} onChatDeleted={handleChatDeleted} />
+          )}
+          {activeTab === 'security' && <SecurityTab />}
+          {activeTab === 'billing' && <BillingTab />}
+          {activeTab === 'account' && (
+            <AccountTab
+              user={user}
+              profile={profile}
+              onProfileUpdate={(u) => setProfile((p) => p ? { ...p, ...u } : p)}
+            />
+          )}
         </div>
       </main>
     </div>
   );
 }
 
-// Default export wraps the page in Suspense so useSearchParams() can resolve during static
-// rendering without throwing.
 export default function SettingsPage() {
   return (
     <Suspense fallback={
