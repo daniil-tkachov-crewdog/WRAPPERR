@@ -40,34 +40,29 @@ function SettingsContent() {
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
-  // Session + data bootstrap. If there's no session OR the profile/chats fetch fails, we
-  // redirect to /login — the page is auth-gated and should never render with stale or fake
-  // data. Errors are logged so we can see them in the dev console instead of being silently
-  // masked. The handle_new_user DB trigger guarantees a profiles row exists for every auth
-  // user, so a missing profile is a real schema/RLS issue worth surfacing.
+  // Session + data bootstrap. We do NOT auto-redirect to /login when there's no session —
+  // that created a loop where Settings bounced to login and login bounced back to /. Instead,
+  // a no-session state renders an inline "Sign in to see Settings" prompt below.
+  // Hard 2s safety timeout: if getSession() hangs (Windows dev navigator-lock race in
+  // @supabase/ssr), flip loading off and render whatever we have so the user isn't stuck on
+  // a spinner forever.
   useEffect(() => {
     const supabase = createClient();
 
-    async function getSessionWithRetry() {
-      // Dev-mode quirk: parallel HMR/prefetch requests race for the navigator auth lock and
-      // one of them gets a "lock stolen" error. Retry once after a brief wait — the lock is
-      // released as soon as the winning request finishes its refresh.
-      const result = await supabase.auth.getSession();
-      if (result.error?.message?.includes('Lock') && result.error.message.includes('stolen')) {
-        await new Promise((r) => setTimeout(r, 500));
-        return supabase.auth.getSession();
-      }
-      return result;
-    }
+    const safety = setTimeout(() => {
+      setLoading(false);
+    }, 2000);
 
-    getSessionWithRetry().then(async ({ data: { session }, error: sessionError }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error: sessionError }) => {
       if (sessionError) {
         console.error('Settings: getSession failed:', sessionError);
-        router.replace('/login');
+        clearTimeout(safety);
+        setLoading(false);
         return;
       }
       if (!session?.user) {
-        router.replace('/login');
+        clearTimeout(safety);
+        setLoading(false);
         return;
       }
       setUser(session.user);
@@ -79,16 +74,11 @@ function SettingsContent() {
         .maybeSingle();
       if (profileError) {
         console.error('Settings: profile fetch failed:', profileError);
-        setLoading(false);
-        return;
-      }
-      if (!profileData) {
-        // Trigger should have created this row on signup — missing means schema is out of sync.
+      } else if (profileData) {
+        setProfile(profileData as Profile);
+      } else {
         console.error('Settings: no profile row for user', session.user.id);
-        setLoading(false);
-        return;
       }
-      setProfile(profileData as Profile);
 
       const { data: chatData, error: chatError } = await supabase
         .from('chats')
@@ -102,12 +92,14 @@ function SettingsContent() {
         setChats(chatData as ChatSummary[]);
       }
 
+      clearTimeout(safety);
       setLoading(false);
     }).catch((err) => {
       console.error('Settings: unexpected bootstrap error:', err);
+      clearTimeout(safety);
       setLoading(false);
     });
-  }, [router]);
+  }, []);
 
   function handleTabChange(tab: Tab) {
     router.push(`/settings?tab=${tab}`);
@@ -125,12 +117,24 @@ function SettingsContent() {
     );
   }
 
-  // After loading, if we still have no profile something broke (logged above). Show a minimal
-  // error rather than crashing tabs that assume profile is non-null.
-  if (!profile || !user) {
+  // No session or no profile → render an inline "sign in" prompt instead of redirecting.
+  // The redirect-to-/login path caused a loop where login → / → click Settings → /login
+  // again because the session cookie wasn't visible to this page yet.
+  if (!user || !profile) {
     return (
-      <div className="flex items-center justify-center h-screen bg-bg text-white text-sm">
-        Couldn&apos;t load your account. Check the console and try refreshing.
+      <div className="flex items-center justify-center h-screen bg-bg">
+        <div className="text-center space-y-4 max-w-sm">
+          <p className="text-white text-sm">Sign in to see Settings.</p>
+          <a
+            href="/login"
+            className="inline-block bg-white text-black font-medium py-2 px-4 rounded-lg text-sm hover:opacity-90 transition-opacity"
+          >
+            Go to login
+          </a>
+          <p className="text-muted text-xs">
+            Already signed in? Try refreshing this page, or check the browser console for errors.
+          </p>
+        </div>
       </div>
     );
   }

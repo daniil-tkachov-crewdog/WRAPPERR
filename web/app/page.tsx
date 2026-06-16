@@ -96,11 +96,20 @@ export default function Home() {
   // Auth init effect: probes the session once, then subscribes for changes. Loads profile +
   // chat list whenever a user appears. authLoading must flip false BEFORE the awaits run so a
   // slow Supabase reply doesn't pin the fullscreen spinner — see comment above setAuthLoading.
+  // Hard 2s safety timeout: if getSession() never resolves (seen in dev on Windows due to a
+  // navigator-lock race in @supabase/ssr) we force the UI out of the loading state and treat
+  // the visit as logged-out. The onAuthStateChange subscription below will still flip user on
+  // when the real session arrives, so this is a soft fallback, not a permanent decision.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const supabase = createClient();
 
+    const safety = setTimeout(() => {
+      setAuthLoading(false);
+    }, 2000);
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      clearTimeout(safety);
       setUser(session?.user ?? null);
       // Unblock the UI immediately once we know the session state — profile and chats load after.
       // Previously setAuthLoading(false) was after the awaits, so a slow/hanging Supabase query
@@ -111,6 +120,7 @@ export default function Home() {
         await loadChats(session.user.id);
       }
     }).catch(() => {
+      clearTimeout(safety);
       setAuthLoading(false);
     });
 
