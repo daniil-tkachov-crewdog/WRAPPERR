@@ -33,6 +33,13 @@ export function tint(hue: string, alpha: number): string {
 
 export const MAX_CHATS = 25;
 
+// MEMORY_CHAR_LIMIT: the per-user budget for personal memory, measured in characters (not
+// tokens — simpler, no tokenizer dependency; ~2000 chars ≈ ~500 tokens). Memory is injected as
+// context into the first prompt of every new chat / AI switch, so it eats into the model's
+// context window — keep this conservative. Enforced in the web app (lib/memory.ts insertMemory),
+// NOT at the DB layer. If you raise this, remember every saved char is re-sent on each injection.
+export const MEMORY_CHAR_LIMIT = 2000;
+
 export const SUMMARY_PROMPT = `Summarise this conversation for transfer to another AI so it can continue without loss of context.
 
 Include:

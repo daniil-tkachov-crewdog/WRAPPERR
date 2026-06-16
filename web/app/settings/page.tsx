@@ -3,9 +3,10 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { User } from '@supabase/supabase-js';
-import type { Profile, ChatSummary } from '@/lib/types';
+import type { Profile, ChatSummary, MemoryUnit } from '@/lib/types';
 import { MAX_CHATS } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
+import { loadMemories, deleteMemory } from '@/lib/memory';
 import Sidebar from '@/components/layout/Sidebar';
 import GeneralTab from '@/components/settings/GeneralTab';
 import CommandsTab from '@/components/settings/CommandsTab';
@@ -36,6 +37,9 @@ function SettingsContent() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
+  // memories: the user's saved memory units, surfaced in the Memory tab. Loaded alongside chats
+  // in the bootstrap effect below.
+  const [memories, setMemories] = useState<MemoryUnit[]>([]);
   const [loading, setLoading] = useState(true);
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
@@ -92,6 +96,10 @@ function SettingsContent() {
         setChats(chatData as ChatSummary[]);
       }
 
+      // Memory units for the Memory tab. Non-critical — errors are logged inside loadMemories
+      // and it returns [] so the rest of Settings still renders.
+      setMemories(await loadMemories(session.user.id));
+
       clearTimeout(safety);
       setLoading(false);
     }).catch((err) => {
@@ -107,6 +115,13 @@ function SettingsContent() {
 
   function handleChatDeleted(id: string) {
     setChats((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  // handleMemoryDeleted: delete a memory unit in Supabase, then drop it from local state so the
+  // list + usage bar update immediately (optimistic, no refetch). RLS scopes the delete to owner.
+  async function handleMemoryDeleted(id: string) {
+    await deleteMemory(id);
+    setMemories((prev) => prev.filter((m) => m.id !== id));
   }
 
   if (loading) {
@@ -180,7 +195,12 @@ function SettingsContent() {
           )}
           {activeTab === 'commands' && <CommandsTab />}
           {activeTab === 'memory' && (
-            <MemoryTab chats={chats} onChatDeleted={handleChatDeleted} />
+            <MemoryTab
+              memories={memories}
+              onMemoryDeleted={handleMemoryDeleted}
+              chats={chats}
+              onChatDeleted={handleChatDeleted}
+            />
           )}
           {activeTab === 'security' && <SecurityTab />}
           {activeTab === 'billing' && <BillingTab />}

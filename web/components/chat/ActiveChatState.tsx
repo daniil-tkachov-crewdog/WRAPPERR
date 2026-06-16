@@ -35,6 +35,9 @@ interface Props {
   // Per-AI pill state. See ChatWindow.tsx for the same drilled props.
   aiOptions: AIOptionsMap;
   onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
+  // onSaveToMemory: drilled to every MessageBubble for the "Save to Memory" button + right-click
+  // popup. See ChatWindow.tsx / page.tsx.
+  onSaveToMemory: (text: string) => Promise<'saved' | 'limit' | 'error'>;
   // Top-of-chat error banner. Used for non-message-bound failures (saveChat upsert, etc.); AI
   // round-trip failures land on the assistant bubble itself via message.wrapperrError.
   pageError?: WrapperrError | null;
@@ -69,6 +72,7 @@ export default function ActiveChatState({
   onRetryCompareSlide,
   aiOptions,
   onAIOptionChange,
+  onSaveToMemory,
   pageError,
   onDismissPageError,
 }: Props) {
@@ -145,7 +149,7 @@ export default function ActiveChatState({
             return (
               <div key={msg.id}>
                 {relay && <RelayCard from={relay.from} to={relay.to} />}
-                <MessageBubble message={msg} onAskAbout={setQuote} />
+                <MessageBubble message={msg} onAskAbout={setQuote} onSaveToMemory={onSaveToMemory} />
               </div>
             );
           })}

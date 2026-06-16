@@ -56,3 +56,14 @@ export interface Profile {
   default_ai: AIModel;
   appearance: AppearanceMode;
 }
+
+// MemoryUnit: one saved piece of personal memory (a full message or a highlighted snippet).
+// Stored in the shared `memories` Supabase table, partitioned per user via RLS (user_id +
+// auth.uid() policies). `id` is a server UUID — never shown in the UI; the Memory tab renders a
+// 1..n index instead. `memory_unit` is the raw text. One saved item = one MemoryUnit, regardless
+// of length (as long as it fits MEMORY_CHAR_LIMIT). created_at is used only for stable ordering.
+export interface MemoryUnit {
+  id: string;
+  memory_unit: string;
+  created_at: string;
+}

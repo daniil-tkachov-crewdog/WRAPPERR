@@ -2,7 +2,8 @@
 -- Drop existing tables first (clean rebuild of SYNAP project).
 
 -- Destructive teardown block: CASCADE wipes child rows too. Running this in production will
--- delete every chat/profile/command — only ever execute on a fresh project or accept full reset.
+-- delete every chat/profile/command/memory — only ever execute on a fresh project or accept full reset.
+DROP TABLE IF EXISTS memories CASCADE;
 DROP TABLE IF EXISTS commands CASCADE;
 DROP TABLE IF EXISTS chats CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
@@ -39,6 +40,20 @@ CREATE TABLE commands (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- memories: personal memory units shared across all AIs. One row = one saved item (a full
+-- message or a highlighted snippet). Shared table partitioned per user via RLS (user_id +
+-- auth.uid() policies below) — NOT a physical table per user. The total-characters cap
+-- (MEMORY_CHAR_LIMIT = 2000) is enforced in the web app (lib/memory.ts), NOT at the DB layer,
+-- so a malicious client could exceed it; move to a pre-insert trigger if abuse becomes a concern.
+CREATE TABLE memories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  memory_unit TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX memories_user_id_idx ON memories(user_id, created_at DESC);
+
 -- =====================
 -- Row Level Security
 -- =====================
@@ -49,6 +64,7 @@ CREATE TABLE commands (
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE commands ENABLE ROW LEVEL SECURITY;
+ALTER TABLE memories ENABLE ROW LEVEL SECURITY;
 
 -- profiles RLS: each auth user can read/write only their own row (id = auth.uid()). No DELETE
 -- policy on purpose — profile deletion is handled by the auth.users CASCADE when the user is
@@ -89,6 +105,18 @@ CREATE POLICY "Users can update own commands" ON commands
   FOR UPDATE USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can delete own commands" ON commands
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- memories RLS: owner-only read / insert / delete. No UPDATE policy — memory units are
+-- immutable once saved (edit = delete + re-add), matching the simple v1 surface. Same
+-- auth.uid() = user_id ownership check as chats/commands.
+CREATE POLICY "Users can view own memories" ON memories
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own memories" ON memories
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own memories" ON memories
   FOR DELETE USING (auth.uid() = user_id);
 
 -- =====================

@@ -14,6 +14,62 @@ import ErrorDisplay from './ErrorDisplay';
 interface Props {
   message: Message;
   onAskAbout?: (text: string) => void;
+  // onSaveToMemory: persist text to the user's personal memory. Used by the "Save to Memory"
+  // action button (saves the whole message) and the right-click popup (saves the highlighted
+  // selection). Returns the outcome so the UI can flash "Saved" / "Limit reached". See
+  // page.tsx addMemory + lib/memory.ts.
+  onSaveToMemory?: (text: string) => Promise<'saved' | 'limit' | 'error'>;
+}
+
+// SaveToMemoryButton — the action-row button that saves a full message to memory. Owns its own
+// transient feedback state (a 1.5s flash) so the user gets confirmation without the parent having
+// to track per-message state. Renders nothing when onSaveToMemory isn't provided (e.g. logged-out
+// or surfaces that don't support memory). The icon is a bookmark; it fills green on success and
+// goes red on "limit"/"error".
+function SaveToMemoryButton({
+  getText,
+  onSaveToMemory,
+}: {
+  getText: () => string;
+  onSaveToMemory?: (text: string) => Promise<'saved' | 'limit' | 'error'>;
+}) {
+  const [state, setState] = useState<'idle' | 'saved' | 'limit' | 'error'>('idle');
+  if (!onSaveToMemory) return null;
+
+  async function handle() {
+    const text = getText().trim();
+    if (!text) return;
+    const result = await onSaveToMemory!(text);
+    setState(result);
+    setTimeout(() => setState('idle'), 1500);
+  }
+
+  const title =
+    state === 'saved'
+      ? 'Saved to memory!'
+      : state === 'limit'
+      ? 'Memory limit reached'
+      : state === 'error'
+      ? 'Save failed'
+      : 'Save to memory';
+  const color =
+    state === 'saved' ? '#34d399' : state === 'limit' || state === 'error' ? '#f87171' : 'var(--dim)';
+
+  return (
+    <button onClick={handle} title={title} className="transition-colors p-1 rounded" style={{ color }}>
+      {state === 'saved' ? (
+        // Filled bookmark = saved confirmation.
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      ) : (
+        // Outline bookmark = default.
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 // MessageBubble — Spectrum redesign.
@@ -41,7 +97,7 @@ const MODEL_ID_LABELS: Record<string, string> = {
   perplexity: 'pplx-online',
 };
 
-export default function MessageBubble({ message, onAskAbout }: Props) {
+export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: Props) {
   const isUser = message.role === 'user';
   const aiModel = message.aiModel;
   const aiLabel = aiModel ? AI_MODELS.find((m) => m.id === aiModel)?.label : undefined;
@@ -51,6 +107,48 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
   const [selectionInfo, setSelectionInfo] =
     useState<{ text: string; top: number; left: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  // contextMenu: the right-click "Save to Memory" popup. Holds the highlighted text plus the
+  // cursor position to render at. Null when hidden. Works on both user and assistant messages.
+  const [contextMenu, setContextMenu] =
+    useState<{ text: string; x: number; y: number } | null>(null);
+
+  // handleContextMenu: on right-click, if the user has a non-empty text selection we suppress the
+  // native browser menu and show our own "Save to Memory" popup at the cursor. If there's no
+  // selection we let the default menu through (so right-click still works normally elsewhere).
+  function handleContextMenu(e: React.MouseEvent) {
+    if (!onSaveToMemory) return;
+    const sel = window.getSelection();
+    const text = sel?.toString().trim();
+    if (!text) return;
+    e.preventDefault();
+    setContextMenu({ text, x: e.clientX, y: e.clientY });
+  }
+
+  // handleSaveSelection: persist the highlighted text from the context-menu popup, then clear the
+  // selection and close the popup. Feedback for partial saves is intentionally light (the popup
+  // just disappears); the per-button flash is reserved for the full-message Save button.
+  async function handleSaveSelection() {
+    if (!contextMenu) return;
+    await onSaveToMemory?.(contextMenu.text);
+    window.getSelection()?.removeAllRanges();
+    setContextMenu(null);
+  }
+
+  // Dismiss the context-menu popup on any outside click or scroll. Mirrors the existing
+  // selectionchange cleanup used by the "Ask about it" popover. Registered only while the popup
+  // is open to avoid needless global listeners.
+  useEffect(() => {
+    if (!contextMenu) return;
+    function close() {
+      setContextMenu(null);
+    }
+    document.addEventListener('mousedown', close);
+    document.addEventListener('scroll', close, true);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('scroll', close, true);
+    };
+  }, [contextMenu]);
 
   // Show: fires on mouseup inside this bubble after a drag-select. We know the selection is
   // inside the bubble because mouseup happened here, so we skip the fragile
@@ -93,12 +191,35 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
     setSelectionInfo(null);
   }
 
+  // contextMenuPopup — the right-click "Save to Memory" popup, shared by both branches. Fixed at
+  // the cursor; onMouseDown preventDefault keeps the selection alive while the click fires (the
+  // outside-click listener uses mousedown to dismiss). zIndex above the chat.
+  const contextMenuPopup = contextMenu && (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={handleSaveSelection}
+      style={{
+        position: 'fixed',
+        top: contextMenu.y,
+        left: contextMenu.x,
+        zIndex: 60,
+      }}
+      className="bg-white text-black text-xs font-medium px-3 py-1.5 rounded-lg shadow-lg hover:bg-gray-100 transition-colors flex items-center gap-1.5"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+      </svg>
+      Save to Memory
+    </button>
+  );
+
   // ── User branch ───────────────────────────────────────────────────────────
-  // Off-white bubble, dark text, right-aligned, bottom-right tail. Copy button sits beneath.
+  // Off-white bubble, dark text, right-aligned, bottom-right tail. Copy + Save buttons sit beneath.
+  // onContextMenu enables the right-click "Save to Memory" popup over highlighted text.
   if (isUser) {
     return (
       <div className="flex justify-end mb-4">
-        <div className="flex flex-col items-end" style={{ maxWidth: '78%' }}>
+        <div className="flex flex-col items-end" style={{ maxWidth: '78%' }} onContextMenu={handleContextMenu}>
           <div
             style={{
               background: '#f3f4f6',
@@ -129,8 +250,11 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
                 </svg>
               )}
             </button>
+            {/* Save the whole message to memory. */}
+            <SaveToMemoryButton getText={() => message.content} onSaveToMemory={onSaveToMemory} />
           </div>
         </div>
+        {contextMenuPopup}
       </div>
     );
   }
@@ -145,6 +269,7 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
       <div
         ref={bubbleRef}
         onMouseUp={onAskAbout ? showFromCurrentSelection : undefined}
+        onContextMenu={handleContextMenu}
         style={{
           paddingLeft: 18,
           borderLeft: `2px solid ${aiHue ? tint(aiHue, 0.5) : 'var(--line)'}`,
@@ -210,7 +335,7 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
           </div>
         )}
 
-        {/* Action row: copy button. */}
+        {/* Action row: copy + save-to-memory buttons. */}
         <div className="flex items-center gap-1 mt-2">
           <button
             onClick={handleCopy}
@@ -229,8 +354,12 @@ export default function MessageBubble({ message, onAskAbout }: Props) {
               </svg>
             )}
           </button>
+          {/* Save the whole assistant response to memory. */}
+          <SaveToMemoryButton getText={() => message.content} onSaveToMemory={onSaveToMemory} />
         </div>
       </div>
+
+      {contextMenuPopup}
 
       {/* Floating "Ask about it" popover. Fixed-positioned at the top of the selection rect;
           translated -50% to center horizontally. onMouseDown preventDefault preserves the

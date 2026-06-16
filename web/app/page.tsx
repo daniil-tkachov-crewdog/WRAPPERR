@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { User } from '@supabase/supabase-js';
-import type { Message, AIModel, ChatSummary, Profile, CompareResponse } from '@/lib/types';
+import type { Message, AIModel, ChatSummary, Profile, CompareResponse, MemoryUnit } from '@/lib/types';
 import { AI_MODELS, MAX_CHATS, SUMMARY_PROMPT } from '@/lib/constants';
 import { isExtensionActive, sendMessageToAI, rereadFromAI } from '@/lib/extension';
 import { loadAIOptions, saveAIOptions, type AIOptionsMap } from '@/lib/aiOptionsStorage';
+import { loadMemories, insertMemory, buildMemoryInjection } from '@/lib/memory';
 import { toWrapperrError, wrapperrError, type WrapperrError } from '@/lib/errors';
 import { createClient } from '@/lib/supabase/client';
 import Sidebar from '@/components/layout/Sidebar';
@@ -72,6 +73,16 @@ export default function Home() {
   const [aiOptions, setAiOptions] = useState<AIOptionsMap>(() => loadAIOptions());
   useEffect(() => { saveAIOptions(aiOptions); }, [aiOptions]);
 
+  // ── Personal memory state ────────────────────────────────────────────────
+  // memories: the user's saved memory units, loaded once on auth. Shared across all AIs.
+  // memoryInjectPending: the guard that ensures memory is injected ONLY at the start of a new
+  // chat and on AI switch — NOT on every message. It starts true (first message of the session
+  // should carry memory), is re-armed by handleNewChat / handleSelectChat / handleSwitchAI, and
+  // is consumed (set false) by the first send that actually injects. If you ever see memory
+  // injected on every turn, this flag isn't being consumed — check the send handlers below.
+  const [memories, setMemories] = useState<MemoryUnit[]>([]);
+  const [memoryInjectPending, setMemoryInjectPending] = useState(true);
+
   // pageError: non-message-bound failures (e.g. saveChat upsert RLS rejection, AI-switch
   // summary relay failure). Surfaced as a dismissable banner above the message list. AI
   // round-trip failures DO NOT use this — they're anchored to the user prompt that caused them
@@ -118,6 +129,7 @@ export default function Home() {
       if (session?.user) {
         await loadProfile(session.user.id);
         await loadChats(session.user.id);
+        setMemories(await loadMemories(session.user.id));
       }
     }).catch(() => {
       clearTimeout(safety);
@@ -130,6 +142,7 @@ export default function Home() {
         if (session?.user) {
           await loadProfile(session.user.id);
           await loadChats(session.user.id);
+          setMemories(await loadMemories(session.user.id));
         }
       }
     );
@@ -193,6 +206,9 @@ export default function Home() {
       setMessages(data.messages as Message[]);
       setSelectedAI(data.ai_model as AIModel);
     }
+    // Opening a chat starts a fresh interaction in the AI's tab, so re-arm memory injection —
+    // the next message sent should carry the user's memory as context.
+    setMemoryInjectPending(true);
   }
 
   // handleNewChat: clears the active thread + all per-thread flags. Note: only the chat ID is
@@ -209,6 +225,35 @@ export default function Home() {
     setCompareMode(false);
     setCompareAIs([]);
     setCompareLocked(false);
+    // New chat = inject memory on the first message of the new session.
+    setMemoryInjectPending(true);
+  }
+
+  // addMemory: persist one memory unit (from the "Save to Memory" button or the right-click
+  // popup in MessageBubble). Returns a status so the bubble can show transient feedback. On a
+  // limit rejection we surface a dismissable banner too, since the bubble feedback is brief.
+  // Updates local `memories` state on success so injection + the Settings tab see it immediately
+  // without a refetch. Requires a logged-in user (memory is per-profile).
+  async function addMemory(text: string): Promise<'saved' | 'limit' | 'error'> {
+    if (!user) return 'error';
+    const result = await insertMemory(user.id, text, memories);
+    if (result.ok) {
+      setMemories((prev) => [...prev, result.unit]);
+      return 'saved';
+    }
+    if (result.reason === 'limit') {
+      setPageError(
+        wrapperrError('UNKNOWN', {
+          scope: 'persistence',
+          stage: 'Save to memory',
+          message: 'Memory limit reached — delete some memory in Settings → Memory to save more.',
+          hint: 'Total saved characters would exceed MEMORY_CHAR_LIMIT (see lib/constants.ts).',
+          details: { op: 'save memory' },
+        })
+      );
+      return 'limit';
+    }
+    return 'error';
   }
 
   // toggleCompare: invoked from the Compare pill in InputBar. Flipping ON clears any stale
@@ -314,10 +359,19 @@ export default function Home() {
     setLoading(true);
     setCompareLocked(true);
 
+    // Memory injection in Compare mode: same rule as single-AI — inject only when pending and
+    // memory exists. Every AI in the fan-out receives the same wrapped prompt so they share the
+    // user's context. The displayed user bubble keeps the original text. Consume the flag once.
+    const outgoing =
+      memoryInjectPending && memories.length > 0
+        ? buildMemoryInjection(memories, text)
+        : text;
+    if (memoryInjectPending) setMemoryInjectPending(false);
+
     await Promise.allSettled(
       ais.map(async (ai) => {
         try {
-          const resp = await sendMessageToAI(ai, text, timeoutMs);
+          const resp = await sendMessageToAI(ai, outgoing, timeoutMs);
           setMessages((prev) =>
             prev.map((m) =>
               m.id === compareId && m.responses
@@ -461,11 +515,22 @@ export default function Home() {
     }
 
     try {
+      // Memory injection: only on the first send of a new chat / after an AI switch (guarded by
+      // memoryInjectPending) and only when there's memory to inject. The chat UI still shows the
+      // ORIGINAL `text` (userMessage above) — only the string sent over the bridge is wrapped
+      // with USER_MEMORY. Consume the flag so follow-up messages in the same session aren't
+      // re-injected. See buildMemoryInjection in lib/memory.ts.
+      const outgoing =
+        memoryInjectPending && memories.length > 0
+          ? buildMemoryInjection(memories, text)
+          : text;
+      if (memoryInjectPending) setMemoryInjectPending(false);
+
       // Per-AI options for the active AI are passed through. If applyOptions isn't wired for
       // this AI yet (FEATURES_WIRED[ai] === false in aiFeatures.ts) the content script ignores
       // the payload and sends with the site's current state — the UI shows a dim caption so
       // the user knows the toggles aren't live yet.
-      const response = await sendMessageToAI(selectedAI, text, timeoutMs, aiOptions[selectedAI]);
+      const response = await sendMessageToAI(selectedAI, outgoing, timeoutMs, aiOptions[selectedAI]);
 
       const aiMessage: Message = {
         id: generateId(),
@@ -511,9 +576,11 @@ export default function Home() {
     if (compareMode) return;
     if (newAI === selectedAI) return;
 
-    // No messages yet — just switch
+    // No messages yet — just switch. Re-arm memory injection so the first message to the new AI
+    // carries the user's memory (there's no relay message here to carry it).
     if (messages.length === 0) {
       setSelectedAI(newAI);
+      setMemoryInjectPending(true);
       return;
     }
 
@@ -524,7 +591,15 @@ export default function Home() {
 
       setSelectedAI(newAI);
 
-      const contextMessage = `Here's the context from our previous conversation:\n\n${summary}\n\nPlease continue from where we left off.`;
+      // AI switch is one of the two injection triggers. The new AI's tab is fresh, so prepend
+      // the user's memory to the context-relay message it receives. We inject here directly
+      // (rather than via the pending flag) because this relay is the new AI's first message;
+      // then clear the flag so the user's NEXT typed message isn't double-injected.
+      const memoryPreamble =
+        memories.length > 0 ? `${buildMemoryInjection(memories, '')}\n\n` : '';
+      setMemoryInjectPending(false);
+
+      const contextMessage = `${memoryPreamble}Here's the context from our previous conversation:\n\n${summary}\n\nPlease continue from where we left off.`;
       const contextResponse = await sendMessageToAI(newAI, contextMessage, timeoutMs);
 
       const transferMsg: Message = {
@@ -600,6 +675,7 @@ export default function Home() {
           onRetryCompareSlide={retryCompareSlide}
           aiOptions={aiOptions}
           onAIOptionChange={setAIOption}
+          onSaveToMemory={addMemory}
           pageError={pageError}
           onDismissPageError={() => setPageError(null)}
         />

@@ -39,6 +39,10 @@ interface Props {
   // time. See web/lib/aiFeatures.ts + web/lib/aiOptionsStorage.ts.
   aiOptions: AIOptionsMap;
   onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
+  // onSaveToMemory: persist a piece of text (full message or highlighted snippet) to the user's
+  // personal memory. Drilled down to every MessageBubble. Returns the save outcome so the bubble
+  // can show transient feedback. See page.tsx addMemory + lib/memory.ts.
+  onSaveToMemory: (text: string) => Promise<'saved' | 'limit' | 'error'>;
   // pageError: non-message-bound failures (saveChat upsert, transient extension issues) so the
   // chat thread itself stays clean. Dismissable. AI-flow failures are anchored to the prompt
   // bubble that caused them (see message.wrapperrError), not here.
@@ -67,6 +71,7 @@ export default function ChatWindow({
   onRetryCompareSlide,
   aiOptions,
   onAIOptionChange,
+  onSaveToMemory,
   pageError,
   onDismissPageError,
 }: Props) {
@@ -127,6 +132,7 @@ export default function ChatWindow({
         onRetryCompareSlide={onRetryCompareSlide}
         aiOptions={aiOptions}
         onAIOptionChange={onAIOptionChange}
+        onSaveToMemory={onSaveToMemory}
         pageError={pageError}
         onDismissPageError={onDismissPageError}
       />
