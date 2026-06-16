@@ -1,19 +1,32 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { wrapperrError, type WrapperrError } from '@/lib/errors';
 import ErrorDisplay from '@/components/chat/ErrorDisplay';
+
+// safeRedirect: only honour same-origin app routes from ?redirect=… Open-redirect guard.
+// Used by sign-in success handler so /settings → /login?redirect=/settings → /settings round
+// trips cleanly instead of always dumping the user back on /.
+function safeRedirect(raw: string | null): string {
+  if (!raw) return '/';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/';
+  return raw;
+}
 
 // Mode discriminates which form is rendered — single-page auth surface that swaps content
 // instead of routing. `signin`/`signup` share most of the form; `magic` and `forgot` are
 // email-only flows.
 type Mode = 'signin' | 'signup' | 'magic' | 'forgot';
 
-// LoginPage — entry point for unauthenticated users. Drives all four auth flows from one
-// component to keep the visual treatment consistent (the same shell, the same form classes).
-// Successful sign-in does a hard navigation to "/" so middleware can pick up the new cookies.
-export default function LoginPage() {
+// LoginInner — actual page body. Wrapped in Suspense by the default export because
+// useSearchParams() requires a Suspense boundary in Next 14 app router.
+// Successful sign-in does a hard navigation to the ?redirect= target (default: "/") so the
+// new session cookies are guaranteed to be in place on the next page.
+function LoginInner() {
+  const searchParams = useSearchParams();
+  const redirectTo = safeRedirect(searchParams.get('redirect'));
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -71,7 +84,7 @@ export default function LoginPage() {
       setWErr(buildAuthError('AUTH_SIGN_IN', sbError));
       setLoading(false);
     } else {
-      window.location.href = '/';
+      window.location.href = redirectTo;
     }
   }
 
@@ -298,5 +311,17 @@ export default function LoginPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-4">
+        <div className="w-5 h-5 border border-white/20 border-t-white rounded-full animate-spin" />
+      </div>
+    }>
+      <LoginInner />
+    </Suspense>
   );
 }

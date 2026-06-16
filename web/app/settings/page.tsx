@@ -126,7 +126,7 @@ function SettingsContent() {
         <div className="text-center space-y-4 max-w-sm">
           <p className="text-white text-sm">Sign in to see Settings.</p>
           <a
-            href="/login"
+            href="/login?redirect=/settings"
             className="inline-block bg-white text-black font-medium py-2 px-4 rounded-lg text-sm hover:opacity-90 transition-opacity"
           >
             Go to login
