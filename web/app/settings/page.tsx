@@ -40,97 +40,92 @@ function SettingsContent() {
   // memories: the user's saved memory units, surfaced in the Memory tab. Loaded alongside chats
   // in the bootstrap effect below.
   const [memories, setMemories] = useState<MemoryUnit[]>([]);
-  const [loading, setLoading] = useState(true);
+  // authState drives which view we show. CRITICAL: we never derive 'anon' from a timeout — that
+  // was the "asks me to login until I refresh" bug. When navigating in from the landing page,
+  // getSession() and the profile query stall briefly on the @supabase/ssr navigator lock; the
+  // old 2s timer fired mid-load, leaving profile null, and the `!user || !profile` gate flashed
+  // the login screen. Now: 'loading' shows a spinner, and the login prompt appears ONLY on a
+  // definitive no-session result (getSession/subscription returned no user).
+  const [authState, setAuthState] = useState<'loading' | 'authed' | 'anon'>('loading');
 
   const activeTab = (searchParams.get('tab') as Tab) ?? 'general';
 
-  // Session + data bootstrap. We do NOT auto-redirect to /login when there's no session —
-  // that created a loop where Settings bounced to login and login bounced back to /. Instead,
-  // a no-session state renders an inline "Sign in to see Settings" prompt below.
+  // Session + data bootstrap. We do NOT auto-redirect to /login when there's no session — that
+  // created a loop where Settings bounced to login and login bounced back to /. Instead a
+  // definitive no-session result renders an inline "Sign in" prompt below.
   //
-  // Two ways the session can arrive, BOTH wired up here so Settings behaves like the landing
-  // page (which never spuriously showed the login prompt):
+  // The session can arrive two ways, both wired up so Settings behaves like the landing page:
   //   1. The initial getSession() probe.
-  //   2. onAuthStateChange — fires INITIAL_SESSION / SIGNED_IN even when getSession() is slow or
-  //      hangs (the @supabase/ssr navigator-lock race). Without this subscription, a slow probe
-  //      tripped the 2s safety timeout below and rendered "Sign in to see Settings" to a user who
-  //      had just logged in on the landing page. This was the root cause of that bug.
-  // Hard 2s safety timeout: only flips the spinner off so the user isn't stuck loading forever —
-  // if it fires before the session resolves, the subscription still hydrates the page afterwards.
+  //   2. onAuthStateChange — fires INITIAL_SESSION / SIGNED_IN even when getSession() is slow
+  //      (the navigator-lock race seen when navigating in from the landing page).
+  // Whichever resolves first wins; the other is a harmless no-op. While neither has answered we
+  // stay in 'loading' (spinner), never the login prompt. The 10s timer is ONLY an anti-hang
+  // fallback so a truly stuck probe doesn't pin the spinner forever.
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
 
-    // hydrate: shared loader for whichever path delivers the session first. Guards against double
-    // work (getSession + subscription both firing) via the `user` check, and against setState on
-    // an unmounted tree via `cancelled`.
-    async function hydrate(session: import('@supabase/supabase-js').Session | null) {
-      if (cancelled) return;
-      if (!session?.user) {
-        setLoading(false);
-        return;
-      }
-      setUser(session.user);
-
+    // loadData: fetch profile + chats + memories once we know the user id. Kept separate from the
+    // auth decision so 'authed' vs 'anon' never waits on these reads.
+    async function loadData(userId: string) {
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', session.user.id)
+        .eq('id', userId)
         .maybeSingle();
       if (cancelled) return;
-      if (profileError) {
-        console.error('Settings: profile fetch failed:', profileError);
-      } else if (profileData) {
-        setProfile(profileData as Profile);
-      } else {
-        console.error('Settings: no profile row for user', session.user.id);
-      }
+      if (profileError) console.error('Settings: profile fetch failed:', profileError);
+      else if (profileData) setProfile(profileData as Profile);
+      else console.error('Settings: no profile row for user', userId);
 
       const { data: chatData, error: chatError } = await supabase
         .from('chats')
         .select('id, name, ai_model, updated_at')
-        .eq('user_id', session.user.id)
+        .eq('user_id', userId)
         .order('updated_at', { ascending: false })
         .limit(MAX_CHATS);
       if (cancelled) return;
-      if (chatError) {
-        console.error('Settings: chats fetch failed:', chatError);
-      } else if (chatData) {
-        setChats(chatData as ChatSummary[]);
-      }
+      if (chatError) console.error('Settings: chats fetch failed:', chatError);
+      else if (chatData) setChats(chatData as ChatSummary[]);
 
-      // Memory units for the Memory tab. Non-critical — errors are logged inside loadMemories
-      // and it returns [] so the rest of Settings still renders.
-      const mem = await loadMemories(session.user.id);
+      // Memory units for the Memory tab. Non-critical — loadMemories logs + returns [] on error.
+      const mem = await loadMemories(userId);
       if (cancelled) return;
       setMemories(mem);
-      setLoading(false);
     }
 
-    const safety = setTimeout(() => {
-      if (!cancelled) setLoading(false);
-    }, 2000);
-
-    supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
-      clearTimeout(safety);
-      if (sessionError) {
-        console.error('Settings: getSession failed:', sessionError);
-        setLoading(false);
-        return;
+    // onSession: single place that turns a session (or its absence) into authState. Both the
+    // probe and the live subscription funnel through here.
+    function onSession(sessionUser: User | null) {
+      if (cancelled) return;
+      if (sessionUser) {
+        setUser(sessionUser);
+        setAuthState('authed');
+        loadData(sessionUser.id);
+      } else {
+        setAuthState('anon');
       }
-      hydrate(session);
-    }).catch((err) => {
-      console.error('Settings: unexpected bootstrap error:', err);
-      clearTimeout(safety);
-      setLoading(false);
-    });
+    }
 
-    // Live subscription: catches a session that lands after the probe / safety timeout, so a
-    // logged-in user who arrives from the landing page never gets stuck on the login prompt.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      clearTimeout(safety);
-      hydrate(session);
-    });
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        if (error) { console.error('Settings: getSession failed:', error); return; }
+        onSession(session?.user ?? null);
+      })
+      .catch((err) => console.error('Settings: unexpected bootstrap error:', err));
+
+    // Live subscription: catches a session that lands after the probe, so a logged-in user
+    // arriving from the landing page hydrates without needing a manual refresh.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => onSession(session?.user ?? null)
+    );
+
+    // Anti-hang fallback ONLY: if nothing resolved after 10s, fall back to the logged-out view so
+    // the user isn't stuck on a spinner forever. Normally the probe/subscription resolve in well
+    // under a second once the navigator lock frees.
+    const safety = setTimeout(() => {
+      if (!cancelled) setAuthState((s) => (s === 'loading' ? 'anon' : s));
+    }, 10000);
 
     return () => {
       cancelled = true;
@@ -154,7 +149,10 @@ function SettingsContent() {
     setMemories((prev) => prev.filter((m) => m.id !== id));
   }
 
-  if (loading) {
+  // Spinner while the session is still resolving, OR while we're authed but the profile row is
+  // still loading. We deliberately stay on the spinner here instead of falling through to the
+  // login prompt — that prevents the login-screen flash when arriving from the landing page.
+  if (authState === 'loading' || (authState === 'authed' && !profile)) {
     return (
       <div className="flex items-center justify-center h-screen bg-bg">
         <div className="w-5 h-5 border border-white/20 border-t-white rounded-full animate-spin" />
@@ -162,10 +160,11 @@ function SettingsContent() {
     );
   }
 
-  // No session or no profile → render an inline "sign in" prompt instead of redirecting.
-  // The redirect-to-/login path caused a loop where login → / → click Settings → /login
-  // again because the session cookie wasn't visible to this page yet.
-  if (!user || !profile) {
+  // Definitive no-session → render an inline "sign in" prompt instead of redirecting. The
+  // redirect-to-/login path caused a loop where login → / → click Settings → /login again
+  // because the session cookie wasn't visible to this page yet. The extra !user/!profile checks
+  // are defensive (and narrow the types for the authed render below).
+  if (authState === 'anon' || !user || !profile) {
     return (
       <div className="flex items-center justify-center h-screen bg-bg">
         <div className="text-center space-y-4 max-w-sm">
