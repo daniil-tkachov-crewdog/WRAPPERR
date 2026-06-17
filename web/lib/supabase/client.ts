@@ -12,6 +12,15 @@ import { createBrowserClient } from '@supabase/ssr';
 // future @supabase/ssr change can't silently disable them. NOTE: the *maximum* session length is
 // still governed by the Supabase project's Auth → Sessions settings (inactivity timeout /
 // time-box) — code can refresh the token but cannot override a server-side session cap.
+//
+// `lock`: pass-through, NO-OP lock that bypasses the Web Locks API. THIS IS A BUG FIX, not a
+// tweak. By default supabase-js wraps getSession()/token-refresh in navigator.locks under a key
+// like "lock:sb-<ref>-auth-token". A hard navigation (our login does window.location.href = '/')
+// can interrupt a getSession() call while it still holds that lock; the lock is never released,
+// so EVERY getSession() on the next page waits on it forever. Symptoms this caused: Settings
+// spins the full anti-hang window then shows the login prompt again, and saved chats never load
+// after logging in on the main page. We don't run multiple tabs that need cross-tab refresh
+// coordination, so a plain pass-through lock is safe and removes the deadlock entirely.
 export function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -21,6 +30,7 @@ export function createClient() {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
+        lock: <R>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => fn(),
       },
     }
   );
