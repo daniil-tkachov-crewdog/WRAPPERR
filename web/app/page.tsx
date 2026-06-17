@@ -490,6 +490,33 @@ export default function Home() {
     }
   }
 
+  // retryMessage: RE-READ the latest response for a single-AI assistant message — same idea as
+  // retryCompareSlide above, but for a normal (non-Compare) assistant bubble. Solves the
+  // "Wrapperr captured only the start / 'Thinking…'" failure by re-scraping the AI's tab where the
+  // reply has by now finished. Does NOT re-send the prompt. On success it swaps the message's
+  // content in place and clears any prior wrapperrError; unlike Compare, normal chats ARE persisted,
+  // so we fire saveChat() afterwards (fire-and-forget, mirroring the send pipeline). On failure we
+  // re-throw so the calling button (MessageBubble) can flash its local error state — the existing
+  // content is left untouched so the user can simply try again.
+  async function retryMessage(messageId: string, ai: AIModel) {
+    const resp = await rereadFromAI(ai, timeoutMs);
+    let updated: Message[] = [];
+    setMessages((cur) => {
+      updated = cur.map((m) =>
+        m.id === messageId ? { ...m, content: resp, wrapperrError: undefined } : m
+      );
+      return updated;
+    });
+    // Persist the corrected content. currentChatId may be null on a brand-new unsaved chat; in
+    // that case there's nothing to upsert yet (the next send will create the row).
+    if (user && currentChatId) {
+      const name = chats.find((c) => c.id === currentChatId)?.name ?? 'Chat';
+      saveChat(currentChatId, name, updated, selectedAI).catch((e) =>
+        console.error('saveChat failed:', e)
+      );
+    }
+  }
+
   // handleSendMessage: the main send pipeline for single-AI turns. Two branches early — the
   // extension must be active (otherwise the UI is already gated to "install extension"), and
   // compareMode short-circuits into runCompareTurn. Everything below the guards is the
@@ -707,6 +734,7 @@ export default function Home() {
           onToggleCompare={toggleCompare}
           onToggleCompareAI={toggleCompareAI}
           onRetryCompareSlide={retryCompareSlide}
+          onRetryMessage={retryMessage}
           aiOptions={aiOptions}
           onAIOptionChange={setAIOption}
           onSaveToMemory={addMemory}

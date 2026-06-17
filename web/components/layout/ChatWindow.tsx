@@ -36,6 +36,9 @@ interface Props {
   onToggleCompare: () => void;
   onToggleCompareAI: (ai: AIModel) => void;
   onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
+  // onRetryMessage: re-check a normal single-AI assistant message. Forwarded to ActiveChatState →
+  // MessageBubble's re-check button. See retryMessage in page.tsx.
+  onRetryMessage: (messageId: string, ai: AIModel) => Promise<void>;
   // Per-AI pill selections (Tools / Model / Style). aiOptions is the whole map (so we can pass
   // any AI's slot down to InputBar without re-keying), onAIOptionChange writes one slot at a
   // time. See web/lib/aiFeatures.ts + web/lib/aiOptionsStorage.ts.
@@ -71,6 +74,7 @@ export default function ChatWindow({
   onToggleCompare,
   onToggleCompareAI,
   onRetryCompareSlide,
+  onRetryMessage,
   aiOptions,
   onAIOptionChange,
   onSaveToMemory,
@@ -153,6 +157,7 @@ export default function ChatWindow({
         onToggleCompare={onToggleCompare}
         onToggleCompareAI={onToggleCompareAI}
         onRetryCompareSlide={onRetryCompareSlide}
+        onRetryMessage={onRetryMessage}
         aiOptions={aiOptions}
         onAIOptionChange={onAIOptionChange}
         onSaveToMemory={onSaveToMemory}

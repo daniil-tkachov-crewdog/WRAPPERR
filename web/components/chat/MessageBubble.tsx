@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Message } from '@/lib/types';
+import type { Message, AIModel } from '@/lib/types';
 import { AI_MODELS, hueOf, tint } from '@/lib/constants';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -19,6 +19,11 @@ interface Props {
   // selection). Returns the outcome so the UI can flash "Saved" / "Limit reached". See
   // page.tsx addMemory + lib/memory.ts.
   onSaveToMemory?: (text: string) => Promise<'saved' | 'limit' | 'error'>;
+  // onRetryMessage: re-check this assistant message — re-reads the latest response from the AI's
+  // tab and swaps the content in place (does NOT re-send the prompt). Used by the re-check button
+  // to recover from premature captures (e.g. DeepSeek's "Let me explore…" caught before the real
+  // answer). See retryMessage in page.tsx. Only wired for assistant messages with a known aiModel.
+  onRetryMessage?: (messageId: string, ai: AIModel) => Promise<void>;
 }
 
 // SaveToMemoryButton — the action-row button that saves a full message to memory.
@@ -113,6 +118,70 @@ function SaveToMemoryButton({
   );
 }
 
+// RecheckButton — the action-row button that re-checks (re-reads) an assistant message.
+// Mirrors the Compare AI re-check (CompareCard.tsx) but for normal single-AI bubbles. Owns its own
+// local state so the spinner/error feedback is self-contained: idle → spinner (while the re-read is
+// in flight) → on success, back to idle (the new content arrives via the message prop from the
+// parent) → on failure, brief red error (~2.5s) then idle. Renders nothing without onRetry/aiModel
+// (e.g. error bubbles or logged-out surfaces). The circular-arrow icon matches CompareCard exactly.
+function RecheckButton({ onRetry }: { onRetry: () => Promise<void> }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
+
+  async function handle() {
+    // Ignore re-clicks while a re-read is in flight so the spinner isn't interrupted.
+    if (state === 'loading') return;
+    setState('loading');
+    try {
+      await onRetry();
+      setState('idle');
+    } catch {
+      // Re-read failed (network buffer + DOM both empty, or the tab navigated). Flash red, then
+      // reset so the user can simply try again. The existing content is left untouched by the parent.
+      setState('error');
+      setTimeout(() => setState('idle'), 2500);
+    }
+  }
+
+  const title =
+    state === 'loading'
+      ? 'Re-checking…'
+      : state === 'error'
+      ? 'Re-check failed — try again'
+      : "Re-check response from the AI's tab";
+  const color = state === 'error' ? '#f87171' : 'var(--dim)';
+
+  return (
+    <button
+      onClick={handle}
+      disabled={state === 'loading'}
+      title={title}
+      className="transition-colors p-1 rounded"
+      style={{ color, background: 'transparent', border: 'none', cursor: 'pointer' }}
+    >
+      {state === 'loading' ? (
+        // Spinner while re-reading.
+        <span
+          className="animate-spin"
+          style={{
+            display: 'inline-block',
+            width: 14,
+            height: 14,
+            border: '1.5px solid var(--line)',
+            borderTopColor: 'var(--text)',
+            borderRadius: '50%',
+          }}
+        />
+      ) : (
+        // Circular-arrow refresh glyph — identical to the Compare AI re-check button.
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="23 4 23 10 17 10" />
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 // MessageBubble — Spectrum redesign.
 // User messages: off-white #f3f4f6 bubble with a tail-bottom-right radius.
 // Assistant messages: no bubble — instead, a 2px provider-hued spine on the left and a chip
@@ -138,7 +207,7 @@ const MODEL_ID_LABELS: Record<string, string> = {
   perplexity: 'pplx-online',
 };
 
-export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: Props) {
+export default function MessageBubble({ message, onAskAbout, onSaveToMemory, onRetryMessage }: Props) {
   const isUser = message.role === 'user';
   const aiModel = message.aiModel;
   const aiLabel = aiModel ? AI_MODELS.find((m) => m.id === aiModel)?.label : undefined;
@@ -480,6 +549,11 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
           </button>
           {/* Save the whole assistant response to memory. */}
           <SaveToMemoryButton getText={() => message.content} onSaveToMemory={onSaveToMemory} />
+          {/* Re-check: re-read this AI's tab to catch the full reply when Wrapperr captured it
+              too early. Only shown for assistant messages with a known provider. */}
+          {onRetryMessage && aiModel && (
+            <RecheckButton onRetry={() => onRetryMessage(message.id, aiModel)} />
+          )}
         </div>
       </div>
 

@@ -32,6 +32,10 @@ interface Props {
   onToggleCompare: () => void;
   onToggleCompareAI: (ai: AIModel) => void;
   onRetryCompareSlide: (compareId: string, ai: AIModel) => void;
+  // onRetryMessage: re-check a normal single-AI assistant message — re-reads the AI's tab and
+  // swaps the message content in place. Mirrors onRetryCompareSlide but for non-Compare bubbles.
+  // Drilled down to each MessageBubble's re-check button. See retryMessage in page.tsx.
+  onRetryMessage: (messageId: string, ai: AIModel) => Promise<void>;
   // Per-AI pill state. See ChatWindow.tsx for the same drilled props.
   aiOptions: AIOptionsMap;
   onAIOptionChange: (ai: AIModel, slot: 'feature' | 'intelligence' | 'style', value: string | string[] | undefined) => void;
@@ -70,6 +74,7 @@ export default function ActiveChatState({
   onToggleCompare,
   onToggleCompareAI,
   onRetryCompareSlide,
+  onRetryMessage,
   aiOptions,
   onAIOptionChange,
   onSaveToMemory,
@@ -149,7 +154,7 @@ export default function ActiveChatState({
             return (
               <div key={msg.id}>
                 {relay && <RelayCard from={relay.from} to={relay.to} />}
-                <MessageBubble message={msg} onAskAbout={setQuote} onSaveToMemory={onSaveToMemory} />
+                <MessageBubble message={msg} onAskAbout={setQuote} onSaveToMemory={onSaveToMemory} onRetryMessage={onRetryMessage} />
               </div>
             );
           })}
