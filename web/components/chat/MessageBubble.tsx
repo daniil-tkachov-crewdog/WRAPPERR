@@ -152,6 +152,12 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   // cursor position to render at. Null when hidden. Works on both user and assistant messages.
   const [contextMenu, setContextMenu] =
     useState<{ text: string; x: number; y: number } | null>(null);
+  // menuSaveState: drives the SAME spinner → done/error flow as the action-row button, but for the
+  // right-click popup. 'idle' shows the normal "Save to Memory" label; 'loading' a spinner; 'done'
+  // a green check; 'error' a red cross. Kept separate from the button's state since this is a
+  // different control instance.
+  const [menuSaveState, setMenuSaveState] =
+    useState<'idle' | 'loading' | 'done' | 'error'>('idle');
 
   // handleContextMenu: on right-click, if the user has a non-empty text selection we suppress the
   // native browser menu and show our own "Save to Memory" popup at the cursor. If there's no
@@ -162,17 +168,43 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
     const text = sel?.toString().trim();
     if (!text) return;
     e.preventDefault();
+    setMenuSaveState('idle');
     setContextMenu({ text, x: e.clientX, y: e.clientY });
   }
 
-  // handleSaveSelection: persist the highlighted text from the context-menu popup, then clear the
-  // selection and close the popup. Feedback for partial saves is intentionally light (the popup
-  // just disappears); the per-button flash is reserved for the full-message Save button.
+  // handleSaveSelection: persist the highlighted text from the context-menu popup, running the
+  // full spinner → done/error flow inside the popup itself (the same UX as the action-row button).
+  // The popup stays open through the save so the spinner/result is visible, then auto-closes. On
+  // failure addMemory (parent) raises the standard Wrapperr error banner; here we just flash the
+  // red cross. e.stopPropagation() in the popup's onMouseDown prevents the document-level dismiss
+  // listener from closing the popup before this click can fire.
   async function handleSaveSelection() {
-    if (!contextMenu) return;
-    await onSaveToMemory?.(contextMenu.text);
-    window.getSelection()?.removeAllRanges();
-    setContextMenu(null);
+    if (!contextMenu || menuSaveState === 'loading') return;
+    const text = contextMenu.text;
+    setMenuSaveState('loading');
+    try {
+      const result = await onSaveToMemory?.(text);
+      if (result === 'saved') {
+        setMenuSaveState('done');
+        window.getSelection()?.removeAllRanges();
+        setTimeout(() => {
+          setContextMenu(null);
+          setMenuSaveState('idle');
+        }, 1200);
+      } else {
+        setMenuSaveState('error');
+        setTimeout(() => {
+          setContextMenu(null);
+          setMenuSaveState('idle');
+        }, 1600);
+      }
+    } catch {
+      setMenuSaveState('error');
+      setTimeout(() => {
+        setContextMenu(null);
+        setMenuSaveState('idle');
+      }, 1600);
+    }
   }
 
   // Dismiss the context-menu popup on any outside click or scroll. Mirrors the existing
@@ -181,7 +213,10 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   useEffect(() => {
     if (!contextMenu) return;
     function close() {
+      // Never tear the popup down mid-save, or the user loses the spinner/result feedback.
+      if (menuSaveState === 'loading') return;
       setContextMenu(null);
+      setMenuSaveState('idle');
     }
     document.addEventListener('mousedown', close);
     document.addEventListener('scroll', close, true);
@@ -189,7 +224,7 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
       document.removeEventListener('mousedown', close);
       document.removeEventListener('scroll', close, true);
     };
-  }, [contextMenu]);
+  }, [contextMenu, menuSaveState]);
 
   // Show: fires on mouseup inside this bubble after a drag-select. We know the selection is
   // inside the bubble because mouseup happened here, so we skip the fragile
@@ -233,12 +268,18 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   }
 
   // contextMenuPopup — the right-click "Save to Memory" popup, shared by both branches. Fixed at
-  // the cursor; onMouseDown preventDefault keeps the selection alive while the click fires (the
-  // outside-click listener uses mousedown to dismiss). zIndex above the chat.
+  // the cursor. onMouseDown: preventDefault keeps the text selection alive; stopPropagation is
+  // CRITICAL — without it the document-level mousedown dismiss listener fires first and unmounts
+  // the popup before onClick can run, so the save never happens (this was the "highlight save does
+  // nothing" bug). Renders the spinner → done/error flow inline via menuSaveState. zIndex above chat.
   const contextMenuPopup = contextMenu && (
     <button
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
       onClick={handleSaveSelection}
+      disabled={menuSaveState === 'loading'}
       style={{
         position: 'fixed',
         top: contextMenu.y,
@@ -247,10 +288,44 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
       }}
       className="bg-white text-black text-xs font-medium px-3 py-1.5 rounded-lg shadow-lg hover:bg-gray-100 transition-colors flex items-center gap-1.5"
     >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-      </svg>
-      Save to Memory
+      {menuSaveState === 'loading' ? (
+        <>
+          <span
+            className="animate-spin"
+            style={{
+              display: 'inline-block',
+              width: 12,
+              height: 12,
+              border: '1.5px solid rgba(0,0,0,0.2)',
+              borderTopColor: '#000',
+              borderRadius: '50%',
+            }}
+          />
+          Saving…
+        </>
+      ) : menuSaveState === 'done' ? (
+        <>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span style={{ color: '#16a34a' }}>Done</span>
+        </>
+      ) : menuSaveState === 'error' ? (
+        <>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+          <span style={{ color: '#dc2626' }}>Failed</span>
+        </>
+      ) : (
+        <>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
+          Save to Memory
+        </>
+      )}
     </button>
   );
 
