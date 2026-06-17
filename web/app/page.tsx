@@ -235,7 +235,20 @@ export default function Home() {
   // Updates local `memories` state on success so injection + the Settings tab see it immediately
   // without a refetch. Requires a logged-in user (memory is per-profile).
   async function addMemory(text: string): Promise<'saved' | 'limit' | 'error'> {
-    if (!user) return 'error';
+    // Not signed in: memory is per-profile, so there's nothing to save against. Surface this
+    // loudly instead of returning silently — a silent return here was why the button "did nothing".
+    if (!user) {
+      setPageError(
+        wrapperrError('UNKNOWN', {
+          scope: 'persistence',
+          stage: 'Save to memory',
+          message: 'You must be signed in to save memory.',
+          hint: 'No Supabase session on this page — sign in, then try again.',
+          details: { op: 'save memory' },
+        })
+      );
+      return 'error';
+    }
     const result = await insertMemory(user.id, text, memories);
     if (result.ok) {
       setMemories((prev) => [...prev, result.unit]);
@@ -253,6 +266,22 @@ export default function Home() {
       );
       return 'limit';
     }
+    // Generic DB failure (RLS / missing table / schema drift). Surface the real Supabase error in
+    // the banner so we never silently swallow a memory save failure again.
+    setPageError(
+      wrapperrError('UNKNOWN', {
+        scope: 'persistence',
+        stage: 'Save to memory',
+        message: 'Supabase rejected the memory save.',
+        hint: 'Likely an RLS mismatch or a missing/altered `memories` table. Check supabase/schema.sql and the memories RLS in the dashboard.',
+        details: {
+          op: 'insert memories',
+          code: result.reason === 'error' ? result.error.code : undefined,
+          dbHint: result.reason === 'error' ? result.error.hint : undefined,
+        },
+        cause: result.reason === 'error' ? { message: result.error.message } : undefined,
+      })
+    );
     return 'error';
   }
 
@@ -509,7 +538,12 @@ export default function Home() {
         setLoading(false);
         return;
       }
-      chatId = generateId();
+      // chatId is the PRIMARY KEY of the chats row (column type UUID in supabase/schema.sql), so
+      // it MUST be a real UUID — generateId()'s base36 string causes Postgres error 22P02
+      // ("invalid input syntax for type uuid") on upsert. crypto.randomUUID() is available in all
+      // modern browsers on secure contexts (https + localhost). Message IDs inside the JSONB
+      // messages array can stay as generateId() since they're never cast to a uuid column.
+      chatId = crypto.randomUUID();
       chatName = chatNameFromMessage(text);
       setCurrentChatId(chatId);
     }

@@ -40,7 +40,11 @@ export async function insertMemory(
   userId: string,
   text: string,
   currentUnits: MemoryUnit[]
-): Promise<{ ok: true; unit: MemoryUnit } | { ok: false; reason: 'empty' | 'limit' | 'error' }> {
+): Promise<
+  | { ok: true; unit: MemoryUnit }
+  | { ok: false; reason: 'empty' | 'limit' }
+  | { ok: false; reason: 'error'; error: { code?: string; message?: string; hint?: string } }
+> {
   const trimmed = text.trim();
   if (!trimmed) return { ok: false, reason: 'empty' };
 
@@ -57,8 +61,18 @@ export async function insertMemory(
     .single();
 
   if (error || !data) {
+    // Carry the real Supabase error up so the caller can surface it in a visible banner instead of
+    // failing silently. Common causes: RLS mismatch, missing `memories` table, or a schema drift.
     console.error('insertMemory error:', error);
-    return { ok: false, reason: 'error' };
+    return {
+      ok: false,
+      reason: 'error',
+      error: {
+        code: (error as { code?: string } | null)?.code,
+        message: error?.message,
+        hint: (error as { hint?: string } | null)?.hint ?? undefined,
+      },
+    };
   }
   return { ok: true, unit: data as MemoryUnit };
 }
