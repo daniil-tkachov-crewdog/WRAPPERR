@@ -158,6 +158,12 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   // different control instance.
   const [menuSaveState, setMenuSaveState] =
     useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  // contextMenuRef points at the popup button so the outside-click dismiss handler can tell when a
+  // click landed INSIDE the popup and skip dismissing — this is the reliable "click outside"
+  // pattern. (Relying on e.stopPropagation() to block the document-level mousedown listener is
+  // unreliable in React 18 because React delegates events at the root, not document — that was the
+  // bug where clicking "Save to Memory" just dismissed the popup without ever saving.)
+  const contextMenuRef = useRef<HTMLButtonElement>(null);
 
   // handleContextMenu: on right-click, if the user has a non-empty text selection we suppress the
   // native browser menu and show our own "Save to Memory" popup at the cursor. If there's no
@@ -212,9 +218,13 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   // is open to avoid needless global listeners.
   useEffect(() => {
     if (!contextMenu) return;
-    function close() {
+    function close(e: Event) {
       // Never tear the popup down mid-save, or the user loses the spinner/result feedback.
       if (menuSaveState === 'loading') return;
+      // Ignore clicks that land inside the popup itself — otherwise the dismiss fires on the same
+      // mousedown as the Save click and unmounts the button before its onClick can run.
+      const target = e.target;
+      if (target instanceof Node && contextMenuRef.current?.contains(target)) return;
       setContextMenu(null);
       setMenuSaveState('idle');
     }
@@ -274,10 +284,8 @@ export default function MessageBubble({ message, onAskAbout, onSaveToMemory }: P
   // nothing" bug). Renders the spinner → done/error flow inline via menuSaveState. zIndex above chat.
   const contextMenuPopup = contextMenu && (
     <button
-      onMouseDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
+      ref={contextMenuRef}
+      onMouseDown={(e) => e.preventDefault()}
       onClick={handleSaveSelection}
       disabled={menuSaveState === 'loading'}
       style={{
