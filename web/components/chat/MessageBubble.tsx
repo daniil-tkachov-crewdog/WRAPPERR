@@ -21,11 +21,13 @@ interface Props {
   onSaveToMemory?: (text: string) => Promise<'saved' | 'limit' | 'error'>;
 }
 
-// SaveToMemoryButton — the action-row button that saves a full message to memory. Owns its own
-// transient feedback state (a 1.5s flash) so the user gets confirmation without the parent having
-// to track per-message state. Renders nothing when onSaveToMemory isn't provided (e.g. logged-out
-// or surfaces that don't support memory). The icon is a bookmark; it fills green on success and
-// goes red on "limit"/"error".
+// SaveToMemoryButton — the action-row button that saves a full message to memory.
+// Click flow (per product spec):
+//   bookmark → spinner (while the save is in flight) → green check "Done" (~2s) → bookmark.
+//   On failure → red cross (~2.5s); the parent (addMemory in page.tsx) additionally raises the
+//   standard Wrapperr error banner. The spinner stays up until onSaveToMemory resolves, which only
+//   happens after Supabase confirms the row AND the in-app memories state (Settings tab source) is
+//   updated. Renders nothing when onSaveToMemory isn't provided (e.g. logged-out surfaces).
 function SaveToMemoryButton({
   getText,
   onSaveToMemory,
@@ -33,34 +35,73 @@ function SaveToMemoryButton({
   getText: () => string;
   onSaveToMemory?: (text: string) => Promise<'saved' | 'limit' | 'error'>;
 }) {
-  const [state, setState] = useState<'idle' | 'saved' | 'limit' | 'error'>('idle');
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   if (!onSaveToMemory) return null;
 
   async function handle() {
+    // Ignore re-clicks while a save is in flight so the spinner isn't interrupted.
+    if (state === 'loading') return;
     const text = getText().trim();
     if (!text) return;
-    const result = await onSaveToMemory!(text);
-    setState(result);
-    setTimeout(() => setState('idle'), 1500);
+    setState('loading');
+    try {
+      const result = await onSaveToMemory!(text);
+      if (result === 'saved') {
+        setState('done');
+        setTimeout(() => setState('idle'), 2000);
+      } else {
+        // 'limit' / 'error' — addMemory has already surfaced the Wrapperr error banner.
+        setState('error');
+        setTimeout(() => setState('idle'), 2500);
+      }
+    } catch {
+      // Defensive: addMemory shouldn't throw, but never leave the button stuck on the spinner.
+      setState('error');
+      setTimeout(() => setState('idle'), 2500);
+    }
   }
 
   const title =
-    state === 'saved'
+    state === 'loading'
+      ? 'Saving…'
+      : state === 'done'
       ? 'Saved to memory!'
-      : state === 'limit'
-      ? 'Memory limit reached'
       : state === 'error'
       ? 'Save failed'
       : 'Save to memory';
-  const color =
-    state === 'saved' ? '#34d399' : state === 'limit' || state === 'error' ? '#f87171' : 'var(--dim)';
+  const color = state === 'done' ? '#34d399' : state === 'error' ? '#f87171' : 'var(--dim)';
 
   return (
-    <button onClick={handle} title={title} className="transition-colors p-1 rounded" style={{ color }}>
-      {state === 'saved' ? (
-        // Filled bookmark = saved confirmation.
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+    <button
+      onClick={handle}
+      disabled={state === 'loading'}
+      title={title}
+      className="transition-colors p-1 rounded"
+      style={{ color }}
+    >
+      {state === 'loading' ? (
+        // Spinner while saving.
+        <span
+          className="animate-spin"
+          style={{
+            display: 'inline-block',
+            width: 14,
+            height: 14,
+            border: '1.5px solid var(--line)',
+            borderTopColor: 'var(--text)',
+            borderRadius: '50%',
+          }}
+        />
+      ) : state === 'done' ? (
+        // Green check = saved confirmation.
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : state === 'error' ? (
+        // Red cross = save failed (banner carries the detail).
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       ) : (
         // Outline bookmark = default.
