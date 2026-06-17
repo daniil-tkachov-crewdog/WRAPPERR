@@ -47,25 +47,26 @@ function SettingsContent() {
   // Session + data bootstrap. We do NOT auto-redirect to /login when there's no session —
   // that created a loop where Settings bounced to login and login bounced back to /. Instead,
   // a no-session state renders an inline "Sign in to see Settings" prompt below.
-  // Hard 2s safety timeout: if getSession() hangs (Windows dev navigator-lock race in
-  // @supabase/ssr), flip loading off and render whatever we have so the user isn't stuck on
-  // a spinner forever.
+  //
+  // Two ways the session can arrive, BOTH wired up here so Settings behaves like the landing
+  // page (which never spuriously showed the login prompt):
+  //   1. The initial getSession() probe.
+  //   2. onAuthStateChange — fires INITIAL_SESSION / SIGNED_IN even when getSession() is slow or
+  //      hangs (the @supabase/ssr navigator-lock race). Without this subscription, a slow probe
+  //      tripped the 2s safety timeout below and rendered "Sign in to see Settings" to a user who
+  //      had just logged in on the landing page. This was the root cause of that bug.
+  // Hard 2s safety timeout: only flips the spinner off so the user isn't stuck loading forever —
+  // if it fires before the session resolves, the subscription still hydrates the page afterwards.
   useEffect(() => {
     const supabase = createClient();
+    let cancelled = false;
 
-    const safety = setTimeout(() => {
-      setLoading(false);
-    }, 2000);
-
-    supabase.auth.getSession().then(async ({ data: { session }, error: sessionError }) => {
-      if (sessionError) {
-        console.error('Settings: getSession failed:', sessionError);
-        clearTimeout(safety);
-        setLoading(false);
-        return;
-      }
+    // hydrate: shared loader for whichever path delivers the session first. Guards against double
+    // work (getSession + subscription both firing) via the `user` check, and against setState on
+    // an unmounted tree via `cancelled`.
+    async function hydrate(session: import('@supabase/supabase-js').Session | null) {
+      if (cancelled) return;
       if (!session?.user) {
-        clearTimeout(safety);
         setLoading(false);
         return;
       }
@@ -76,6 +77,7 @@ function SettingsContent() {
         .select('*')
         .eq('id', session.user.id)
         .maybeSingle();
+      if (cancelled) return;
       if (profileError) {
         console.error('Settings: profile fetch failed:', profileError);
       } else if (profileData) {
@@ -90,6 +92,7 @@ function SettingsContent() {
         .eq('user_id', session.user.id)
         .order('updated_at', { ascending: false })
         .limit(MAX_CHATS);
+      if (cancelled) return;
       if (chatError) {
         console.error('Settings: chats fetch failed:', chatError);
       } else if (chatData) {
@@ -98,15 +101,42 @@ function SettingsContent() {
 
       // Memory units for the Memory tab. Non-critical — errors are logged inside loadMemories
       // and it returns [] so the rest of Settings still renders.
-      setMemories(await loadMemories(session.user.id));
-
-      clearTimeout(safety);
+      const mem = await loadMemories(session.user.id);
+      if (cancelled) return;
+      setMemories(mem);
       setLoading(false);
+    }
+
+    const safety = setTimeout(() => {
+      if (!cancelled) setLoading(false);
+    }, 2000);
+
+    supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
+      clearTimeout(safety);
+      if (sessionError) {
+        console.error('Settings: getSession failed:', sessionError);
+        setLoading(false);
+        return;
+      }
+      hydrate(session);
     }).catch((err) => {
       console.error('Settings: unexpected bootstrap error:', err);
       clearTimeout(safety);
       setLoading(false);
     });
+
+    // Live subscription: catches a session that lands after the probe / safety timeout, so a
+    // logged-in user who arrives from the landing page never gets stuck on the login prompt.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      clearTimeout(safety);
+      hydrate(session);
+    });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(safety);
+      subscription.unsubscribe();
+    };
   }, []);
 
   function handleTabChange(tab: Tab) {
