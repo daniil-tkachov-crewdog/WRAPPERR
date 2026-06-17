@@ -195,53 +195,82 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* 4. Account footer. Static placeholder name and sub-line — we don't yet expose profile
-          name in the sidebar, so this matches the design's "Daniil T. / Pro · 5 providers linked"
-          target. Settings gear routes to /settings as before. */}
-      <div
-        className="flex items-center"
-        style={{ borderTop: '1px solid var(--line)', padding: 12, gap: 10 }}
-      >
-        <span
-          style={{
-            width: 26,
-            height: 26,
-            borderRadius: '50%',
-            background: 'linear-gradient(150deg,#3a3a3d,#202022)',
-            border: '1px solid var(--line)',
-            flexShrink: 0,
-          }}
-        />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--text)', fontWeight: 520, lineHeight: 1.1 }}>
-            Daniil T.
-          </div>
-          <div className="font-mono" style={{ fontSize: 10.5, color: 'var(--dim)' }}>
-            Pro · 5 providers linked
-          </div>
-        </div>
-        <button
-          onClick={handleSettings}
-          title="Settings"
-          className="transition-colors"
-          style={{
-            width: 26,
-            height: 26,
-            display: 'grid',
-            placeItems: 'center',
-            background: 'transparent',
-            border: 'none',
-            color: isSettings ? 'var(--text)' : 'var(--dim)',
-            cursor: 'pointer',
-            borderRadius: 7,
-          }}
+      {/* 4. Account footer / login slot. Logged in → the account bar (avatar + name + plan +
+          settings gear), unchanged from the original design. Logged out → a single Log In button
+          fills the same footer slot, matching the screenshot where login replaces the Settings
+          bar. Routing the button to /login reuses the existing auth page. The isLoggedIn switch
+          is the only behavioural change here; the logged-in branch is byte-for-byte as before. */}
+      {isLoggedIn ? (
+        <div
+          className="flex items-center"
+          style={{ borderTop: '1px solid var(--line)', padding: 12, gap: 10 }}
         >
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <circle cx="12" cy="12" r="2.6" />
-            <path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6" />
-          </svg>
-        </button>
-      </div>
+          <span
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: '50%',
+              background: 'linear-gradient(150deg,#3a3a3d,#202022)',
+              border: '1px solid var(--line)',
+              flexShrink: 0,
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, color: 'var(--text)', fontWeight: 520, lineHeight: 1.1 }}>
+              Daniil T.
+            </div>
+            <div className="font-mono" style={{ fontSize: 10.5, color: 'var(--dim)' }}>
+              Pro · 5 providers linked
+            </div>
+          </div>
+          <button
+            onClick={handleSettings}
+            title="Settings"
+            className="transition-colors"
+            style={{
+              width: 26,
+              height: 26,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'transparent',
+              border: 'none',
+              color: isSettings ? 'var(--text)' : 'var(--dim)',
+              cursor: 'pointer',
+              borderRadius: 7,
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <circle cx="12" cy="12" r="2.6" />
+              <path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+        <div style={{ borderTop: '1px solid var(--line)', padding: 12 }}>
+          <button
+            onClick={() => router.push('/login')}
+            className="w-full flex items-center justify-center transition-colors hover:opacity-90"
+            style={{
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              color: 'var(--text)',
+              fontSize: 13.5,
+              fontWeight: 520,
+              cursor: 'pointer',
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              <path d="M10 17l5-5-5-5" />
+              <path d="M15 12H3" />
+            </svg>
+            Log In
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

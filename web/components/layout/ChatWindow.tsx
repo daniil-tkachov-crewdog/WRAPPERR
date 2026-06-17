@@ -5,13 +5,15 @@ import type { Message, AIModel } from '@/lib/types';
 import type { AIOptionsMap } from '@/lib/aiOptionsStorage';
 import type { WrapperrError } from '@/lib/errors';
 import NoExtensionState from '@/components/chat/NoExtensionState';
+import LoggedOutState from '@/components/chat/LoggedOutState';
 import ActiveChatState from '@/components/chat/ActiveChatState';
 
-// ChatWindow: top-level container for the right pane. Renders one of two states based on
-// whether the Wrapperr Chrome extension is active. Auth gating is intentionally OFF — the app
-// works without a Supabase session (chats just aren't persisted; saveChat() in page.tsx no-ops
-// when user is null). Re-enable the auth block by reintroducing the `if (!user)` branch when
-// Supabase email rate limits / login flow is sorted.
+// ChatWindow: top-level container for the right pane. Renders one of three states, checked in
+// priority order: (1) logged-out → LoggedOutState + disabled composer (the auth gate), (2)
+// extension-not-active → NoExtensionState + disabled composer, (3) active chat. Auth gating is
+// ON: the app needs a Supabase session for every backed feature (chat persistence, memory,
+// profile), so a logged-out user is parked on the login prompt and the live composer is never
+// mounted — there's no path to send a message or call an AI while signed out.
 // chatName is threaded down to ActiveChatState → TopBar so the header shows the current chat's
 // name (or "New chat" placeholder until the first message names the chat).
 interface Props {
@@ -51,8 +53,8 @@ interface Props {
 }
 
 export default function ChatWindow({
-  // user is accepted for parity with page.tsx but no longer used to gate the UI.
-  user: _user,
+  // user gates the whole pane: null === logged out → render the login prompt below.
+  user,
   extensionActive,
   messages,
   selectedAI,
@@ -75,6 +77,48 @@ export default function ChatWindow({
   pageError,
   onDismissPageError,
 }: Props) {
+  // DisabledComposer: the grayed-out, unclickable chatbar mock shown under both the logged-out
+  // and no-extension prompts. opacity 0.4 + cursor:not-allowed make it read as "disabled" while
+  // keeping the Spectrum surface so the layout doesn't jump. It renders nothing interactive —
+  // there is no textarea or send button to click — which is exactly why it's safe as the gate's
+  // visible chatbar.
+  const DisabledComposer = ({ label }: { label: string }) => (
+    <div style={{ padding: '10px 28px 22px' }}>
+      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+        <div
+          className="flex items-center"
+          style={{
+            gap: 12,
+            background: 'var(--panel)',
+            border: '1px solid var(--line)',
+            borderRadius: 18,
+            padding: '14px 16px',
+            opacity: 0.4,
+            cursor: 'not-allowed',
+          }}
+        >
+          <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>ChatGPT</span>
+          <div style={{ width: 1, height: 20, background: 'var(--line)' }} />
+          <span style={{ flex: 1, fontSize: 14, color: 'var(--dim)' }}>{label}</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Logged-out gate: checked FIRST so login takes priority over the extension prompt. No live
+  // composer is mounted here, so a signed-out user cannot send a message or trigger any AI /
+  // Supabase feature. They get the centered login CTA + the disabled chatbar.
+  if (!user) {
+    return (
+      <div className="flex flex-col flex-1 h-full">
+        <div className="flex-1 flex items-center justify-center px-6">
+          <LoggedOutState />
+        </div>
+        <DisabledComposer label="Log in to start chatting…" />
+      </div>
+    );
+  }
+
   // Extension-not-installed state: the chat UI is fully blocked because every message has to be
   // delivered through the extension's content scripts. The composer placeholder below mirrors
   // the Spectrum surface so it still looks like the same app, just disabled.
@@ -84,28 +128,7 @@ export default function ChatWindow({
         <div className="flex-1 flex items-center justify-center px-6">
           <NoExtensionState />
         </div>
-        <div style={{ padding: '10px 28px 22px' }}>
-          <div style={{ maxWidth: 720, margin: '0 auto' }}>
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                background: 'var(--panel)',
-                border: '1px solid var(--line)',
-                borderRadius: 18,
-                padding: '14px 16px',
-                opacity: 0.4,
-                cursor: 'not-allowed',
-              }}
-            >
-              <span style={{ fontSize: 12.5, color: 'var(--dim)' }}>ChatGPT</span>
-              <div style={{ width: 1, height: 20, background: 'var(--line)' }} />
-              <span style={{ flex: 1, fontSize: 14, color: 'var(--dim)' }}>
-                Install extension to start chatting…
-              </span>
-            </div>
-          </div>
-        </div>
+        <DisabledComposer label="Install extension to start chatting…" />
       </div>
     );
   }
