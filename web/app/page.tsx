@@ -713,6 +713,8 @@ export default function Home() {
         onSelectChat={handleSelectChat}
         onNewChat={handleNewChat}
         isLoggedIn={!!user}
+        profile={profile}
+        email={user?.email ?? null}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
