@@ -267,34 +267,37 @@ function isToolRowOn(row) {
   return ds === 'checked' || ds === 'on';
 }
 
-// openToolsPopover: clicks the trigger and waits for aria-expanded=true. Idempotent if already
-// open. Returns true on success, false on failure (trigger missing or popover never opens).
+// openToolsPopover: clicks the trigger and waits for the menu to appear in the DOM.
+// ChatGPT stopped updating aria-expanded reliably, so we check for a visible [role="menu"]
+// or any menuitemradio instead — those are only present when the popover is actually open.
+// Idempotent if already open. Returns true on success, false on failure.
+function isPopoverOpen() {
+  return !!document.querySelector('[role="menu"]')
+      || !!document.querySelector('[role="menuitemradio"]');
+}
+
 async function openToolsPopover() {
   const trigger = findToolsTrigger();
   if (!trigger) return false;
-  if (trigger.getAttribute('aria-expanded') === 'true') return true;
+  if (isPopoverOpen()) return true;
   radixOpen(trigger);
-  const ok = await waitFor(() => trigger.getAttribute('aria-expanded') === 'true', 1500);
+  const ok = await waitFor(() => isPopoverOpen(), 1500);
   return Boolean(ok);
 }
 
 // closeToolsPopover: prefer clicking the trigger again (which Radix treats as toggle); fall
-// back to Escape if the trigger is missing or the click didn't take. Waits for aria-expanded
-// to flip back to false so a subsequent send-button click can't accidentally land in the menu.
+// back to Escape if the trigger is missing or the click didn't take. Waits for the menu
+// to disappear from the DOM — aria-expanded is no longer reliable on ChatGPT.
 async function closeToolsPopover() {
-  // Prefer Escape — pointer-events on the trigger when the menu is open can re-trigger Radix's
-  // open intent on some versions. Escape always closes the topmost dropdown cleanly.
+  // Prefer Escape — always closes the topmost Radix dropdown cleanly.
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  const closed = await waitFor(() => {
-    const t = findToolsTrigger();
-    return !t || t.getAttribute('aria-expanded') !== 'true';
-  }, 500);
+  const closed = await waitFor(() => !isPopoverOpen(), 500);
   if (closed) return;
-  // Escape ignored? Try clicking the trigger as a fallback toggle.
+  // Escape ignored? Click the trigger as a fallback toggle.
   const trigger = findToolsTrigger();
-  if (trigger && trigger.getAttribute('aria-expanded') === 'true') {
+  if (trigger && isPopoverOpen()) {
     radixOpen(trigger);
-    await waitFor(() => trigger.getAttribute('aria-expanded') !== 'true', 500);
+    await waitFor(() => !isPopoverOpen(), 500);
   }
 }
 
