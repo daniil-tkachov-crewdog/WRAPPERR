@@ -191,6 +191,8 @@ function SettingsContent() {
         onSelectChat={() => router.push('/')}
         onNewChat={() => router.push('/')}
         isLoggedIn={!!user}
+        profile={profile}
+        email={user?.email ?? null}
       />
 
       <main className="flex-1 flex min-w-0">

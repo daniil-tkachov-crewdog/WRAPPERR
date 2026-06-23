@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import type { ChatSummary } from '@/lib/types';
+import type { ChatSummary, Profile } from '@/lib/types';
 import { hueOf } from '@/lib/constants';
 import ProviderMark from '@/components/chat/ProviderMark';
 
@@ -21,6 +21,24 @@ interface Props {
   onSelectChat: (id: string) => void;
   onNewChat: () => void;
   isLoggedIn: boolean;
+  // Real account data for the footer. profile carries the display name; email is the Supabase
+  // user's email (lives on the auth user, NOT the profile row). Both are null until auth resolves
+  // — the footer falls back gracefully (see formatName + the email line below) so we never render
+  // the old hardcoded "Daniil T. / Pro · 5 providers linked" placeholder to real users again.
+  profile: Profile | null;
+  email: string | null;
+}
+
+// formatName: turns a stored full name into the compact "First L." footer label.
+// Rules: 2+ words → first word + last word's initial + "."; a single word → shown as-is; empty
+// or missing → "Account" fallback so the footer never renders blank or the old fake name.
+function formatName(name: string | null | undefined): string {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return 'Account';
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const last = parts[parts.length - 1];
+  return `${parts[0]} ${last.charAt(0).toUpperCase()}.`;
 }
 
 export default function Sidebar({
@@ -29,6 +47,8 @@ export default function Sidebar({
   onSelectChat,
   onNewChat,
   isLoggedIn,
+  profile,
+  email,
 }: Props) {
   // Routing context. isSettings drives both the gear's active treatment and "bounce back to
   // the chat surface" when New chat / a recent is clicked from /settings.
@@ -216,12 +236,20 @@ export default function Sidebar({
             }}
           />
           <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Account name + email, both from real data. Name is compacted to "First L." via
+                formatName; the email line is omitted entirely when we don't have one (rather than
+                rendering an empty mono row). Replaces the former hardcoded fake values. */}
             <div style={{ fontSize: 12.5, color: 'var(--text)', fontWeight: 520, lineHeight: 1.1 }}>
-              Daniil T.
+              {formatName(profile?.name)}
             </div>
-            <div className="font-mono" style={{ fontSize: 10.5, color: 'var(--dim)' }}>
-              Pro · 5 providers linked
-            </div>
+            {email && (
+              <div
+                className="font-mono"
+                style={{ fontSize: 10.5, color: 'var(--dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {email}
+              </div>
+            )}
           </div>
           <button
             onClick={handleSettings}
